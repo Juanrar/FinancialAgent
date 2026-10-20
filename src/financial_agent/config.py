@@ -1,6 +1,6 @@
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -10,10 +10,10 @@ class ConfigError(Exception):
 
 @dataclass(frozen=True)
 class Settings:
-    telegram_bot_token: str
+    telegram_bot_token: str = field(repr=False)
     telegram_owner_id: int
     db_path: Path
-    claude_oauth_token: str
+    claude_oauth_token: str = field(repr=False)
     claude_config_dir: Path
     agent_cwd: Path
     claude_model: str

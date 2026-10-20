@@ -26,3 +26,9 @@ def test_missing_required_var_is_named(missing):
 def test_owner_id_must_be_integer():
     with pytest.raises(ConfigError, match="TELEGRAM_OWNER_ID"):
         load_settings({**REQUIRED, "TELEGRAM_OWNER_ID": "abc"})
+
+
+def test_settings_repr_hides_tokens():
+    text = repr(load_settings({**REQUIRED, "TELEGRAM_BOT_TOKEN": "tok-telegram-1", "CLAUDE_CODE_OAUTH_TOKEN": "tok-oauth-2"}))
+    assert "tok-telegram-1" not in text
+    assert "tok-oauth-2" not in text
