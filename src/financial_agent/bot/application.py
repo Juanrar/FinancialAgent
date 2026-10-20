@@ -15,7 +15,7 @@ from telegram.ext import (
 )
 
 from financial_agent.agent.session import AgentSession
-from financial_agent.bot import memory_cmd
+from financial_agent.bot import contacts_cmd, memory_cmd
 from financial_agent.bot.awaiting import clear_awaiting
 from financial_agent.bot.chat import on_pending_callback, on_text
 from financial_agent.config import Settings
@@ -77,6 +77,8 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("memory", memory_cmd.on_memory))
     application.add_handler(CallbackQueryHandler(memory_cmd.on_memory_callback, pattern=r"^m:"))
+    application.add_handler(CommandHandler("contactos", contacts_cmd.on_contacts))
+    application.add_handler(CallbackQueryHandler(contacts_cmd.on_contacts_callback, pattern=r"^[cd]:"))
     application.add_handler(MessageHandler(~filters.TEXT & ~filters.COMMAND, unsupported_message))
     application.add_handler(CallbackQueryHandler(on_pending_callback, pattern=r"^p:"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
@@ -90,7 +92,13 @@ def build_application(
     application.bot_data["settings"] = settings
     application.bot_data["conn"] = conn
     application.bot_data["session"] = session
-    application.bot_data["awaiting_handlers"] = {"note_edit": memory_cmd.handle_awaiting}
+    application.bot_data["awaiting_handlers"] = {
+        "note_edit": memory_cmd.handle_awaiting,
+        "contact_rename": contacts_cmd.handle_awaiting,
+        "contact_nicknames": contacts_cmd.handle_awaiting,
+        "destination_add": contacts_cmd.handle_awaiting,
+        "destination_value": contacts_cmd.handle_awaiting,
+    }
     register_handlers(application)
     return application
 

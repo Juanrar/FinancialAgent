@@ -52,7 +52,13 @@ def test_build_application(settings, conn):
     assert application.bot_data["settings"] is settings
     assert application.bot_data["conn"] is conn
     assert application.bot_data["session"] is session
-    assert set(application.bot_data["awaiting_handlers"]) == {"note_edit"}
+    assert set(application.bot_data["awaiting_handlers"]) == {
+        "note_edit",
+        "contact_rename",
+        "contact_nicknames",
+        "destination_add",
+        "destination_value",
+    }
     assert application.concurrent_updates == 1
 
 
