@@ -44,6 +44,7 @@ class FakeClient:
         self.connected = False
         self.interrupted = False
         self.disconnected = False
+        self.interrupt_error = None
         self._queue = []
 
     async def connect(self):
@@ -67,6 +68,8 @@ class FakeClient:
 
     async def interrupt(self):
         self.interrupted = True
+        if self.interrupt_error:
+            raise self.interrupt_error
 
     async def disconnect(self):
         self.disconnected = True
@@ -122,6 +125,20 @@ async def test_unexpected_tool_aborts(conn, settings):
         await session.send("hola")
     assert e.value.user_message == MSG_TOOLS and fake.disconnected
     assert fake.interrupted
+
+
+async def test_unexpected_tool_aborts_even_if_interrupt_fails(conn, settings):
+    init = SystemMessage(subtype="init", data={"tools": [*ALLOWED_TOOLS, "Bash"]})
+    first = FakeClient([init, result("turno abortado")])
+    first.interrupt_error = Exception("Control request timeout: interrupt")
+    second = FakeClient([INIT_OK, result("nuevo")])
+    clients = [first, second]
+    session = AgentSession(settings, conn, client_factory=lambda options: clients.pop(0))
+    with pytest.raises(AgentError) as e:
+        await session.send("hola")
+    assert e.value.user_message == MSG_TOOLS and first.disconnected
+    reply = await session.send("otra vez")
+    assert reply.text == "nuevo" and second.queries == ["otra vez"]
 
 
 async def test_init_without_tools_list_aborts(conn, settings):

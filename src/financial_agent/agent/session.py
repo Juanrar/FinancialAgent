@@ -232,11 +232,15 @@ class AgentSession:
             await self._abort(client)
 
     async def _abort(self, client: ClaudeSDKClient) -> NoReturn:
+        # El SDK levanta un Exception común si el control request de interrupt
+        # vence o el CLI lo rechaza. Igual hay que cerrar: el chequeo no puede
+        # dejar abierto un cliente que ve herramientas ajenas.
         try:
             await client.interrupt()
-        except ClaudeSDKError as error:
+        except Exception as error:
             logger.error("No se pudo interrumpir la sesión: %s", type(error).__name__)
-        await self._disconnect()
+        finally:
+            await self._disconnect()
         raise AgentError(MSG_TOOLS)
 
     async def _disconnect(self) -> None:
