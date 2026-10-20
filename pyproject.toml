@@ -1,0 +1,26 @@
+[project]
+name = "financial-agent"
+version = "0.1.0"
+description = "Bot de Telegram con un agente de Claude para finanzas personales"
+requires-python = ">=3.13"
+dependencies = [
+    "claude-agent-sdk>=0.2.168",
+    "fastapi>=0.155.0",
+    "python-telegram-bot>=22.8",
+    "tzdata>=2026.5",
+    "uvicorn>=0.54.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.8,<0.13"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
