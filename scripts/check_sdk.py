@@ -30,6 +30,7 @@ from claude_agent_sdk import (
 )
 
 DEFAULT_MODEL = "claude-sonnet-5-5"
+PING_TOOL = "mcp__fa__ping"
 PROMPT = "Llamá a la herramienta ping y después respondé solo OK."
 
 
@@ -110,6 +111,8 @@ async def run(options: ClaudeAgentOptions, state: dict) -> None:
             if isinstance(msg, SystemMessage) and msg.subtype == "init":
                 data = msg.data
                 state["session_id"] = data.get("session_id")
+                state["tools"] = data.get("tools")
+                state["mcp_servers"] = data.get("mcp_servers")
                 print("  init keys:", sorted(data))
                 print("  init tools:", data.get("tools"))
                 print("  init mcp_servers:", data.get("mcp_servers"))
@@ -117,6 +120,7 @@ async def run(options: ClaudeAgentOptions, state: dict) -> None:
                 for block in msg.content:
                     if isinstance(block, ToolUseBlock):
                         print("  tool_use:", block.name)
+                        state["tool_uses"].append(block.name)
             elif isinstance(msg, RateLimitEvent):
                 print("  rate_limit:", msg)
             elif isinstance(msg, ResultMessage):
@@ -124,45 +128,83 @@ async def run(options: ClaudeAgentOptions, state: dict) -> None:
                 print("  subtype:", msg.subtype)
                 print("  is_error:", msg.is_error)
                 print("  result:", msg.result)
+                state["result"] = msg.result
                 print("  session_id:", msg.session_id)
 
 
-def report_files(projects: Path, session_id: str | None, delete_session: bool) -> None:
+def report_files(projects: Path, session_id: str | None, delete_session: bool) -> int | None:
+    """Imprime los archivos y devuelve cuántos .jsonl de la sesión había (None si no se pudo ver)."""
     print("SDK:", claude_agent_sdk.__version__)
-    if not projects.exists():
+    if session_id is None:
+        print("no se pudo verificar: no hay session_id")
+        found: list[Path] | None = None
+    elif not projects.exists():
         print(f"{projects} no existe")
-        return
-    if delete_session:
-        if session_id is None:
-            print("no se pudo verificar: no hay session_id")
-            return
+        found = []
+    else:
         found = list(projects.rglob(f"{session_id}.jsonl"))
         print(f"archivos .jsonl de la sesión {session_id}: {len(found)}")
         for path in found:
             print("  ", path)
-            path.unlink()
-        if found:
+            if delete_session:
+                path.unlink()
+        if found and delete_session:
             print("  (borrados)")
-    else:
+    if not delete_session and projects.exists():
         files = [p for p in projects.rglob("*") if p.is_file()]
         print(f"archivos bajo {projects}: {len(files)}")
         for path in files:
             print("  ", path)
+    return None if found is None else len(found)
 
 
-def main() -> None:
+def _server_names(servers) -> list[str] | None:
+    if servers is None:
+        return None
+    if isinstance(servers, dict):
+        return sorted(servers)
+    return sorted(s.get("name") if isinstance(s, dict) else str(s) for s in servers)
+
+
+def summarize(state: dict, session_files: int | None) -> tuple[list[str], int]:
+    """Una línea OK / FALLA / NO VERIFICADO por chequeo, y el código de salida."""
+    tools = state.get("tools")
+    servers = _server_names(state.get("mcp_servers"))
+    result = state.get("result")
+    checks = [
+        ("tools == [mcp__fa__ping]", None if tools is None else tools == [PING_TOOL]),
+        ("solo el servidor fa en mcp_servers", None if servers is None else servers == ["fa"]),
+        ("se llamó a ping", PING_TOOL in state.get("tool_uses", []) if result is not None else None),
+        ("resultado == OK", None if result is None else result.strip() == "OK"),
+        ("sin .jsonl de sesión", None if session_files is None else session_files == 0),
+    ]
+    lines = []
+    failed = False
+    for name, ok in checks:
+        label = "NO VERIFICADO" if ok is None else "OK" if ok else "FALLA"
+        failed = failed or label == "FALLA"
+        lines.append(f"{label}: {name}")
+    return lines, 1 if failed else 0
+
+
+def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--existing-login", action="store_true")
     parser.add_argument("--fallback-permissions", action="store_true")
     args = parser.parse_args()
     options, projects, tmp_cwd = build_options(args)
-    state: dict = {"session_id": None}
+    state: dict = {"session_id": None, "tool_uses": []}
+    session_files = None
     try:
         asyncio.run(run(options, state))
     finally:
-        report_files(projects, state["session_id"], args.existing_login)
+        session_files = report_files(projects, state["session_id"], args.existing_login)
         if tmp_cwd:
             shutil.rmtree(tmp_cwd, ignore_errors=True)
+    lines, code = summarize(state, session_files)
+    print()
+    print("\n".join(lines))
+    return code
 
 
 if __name__ == "__main__":
