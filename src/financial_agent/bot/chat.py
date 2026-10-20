@@ -48,6 +48,11 @@ async def _keep_typing(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None
         await asyncio.sleep(TYPING_INTERVAL)
 
 
+async def _send_pending(message, pending) -> None:
+    for action in pending:
+        await message.reply_text(action.description, reply_markup=pending_keyboard(action.id))
+
+
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     awaiting = get_awaiting(context)
     if awaiting is not None:
@@ -62,6 +67,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         reply = await session.send(message.text)
     except AgentError as error:
         await message.reply_text(error.user_message)
+        await _send_pending(message, error.pending)
         return
     finally:
         typing.cancel()
@@ -73,8 +79,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await message.reply_text(part)
     elif not reply.pending:
         await message.reply_text(MSG_NOTHING)
-    for action in reply.pending:
-        await message.reply_text(action.description, reply_markup=pending_keyboard(action.id))
+    await _send_pending(message, reply.pending)
 
 
 async def on_pending_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

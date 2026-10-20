@@ -107,6 +107,19 @@ async def test_on_text_agent_error_sends_user_message(caplog):
     assert "Claude" not in caplog.text
 
 
+async def test_on_text_agent_error_sends_pending_with_buttons(conn):
+    contact = contacts.create_contact(conn, "Fede")
+    action = create_action(conn, "delete_contact", {"contact_id": contact.id})
+    error = AgentError("Corté.", pending=[action])
+    session = SimpleNamespace(send=AsyncMock(side_effect=error))
+    update = _text_update()
+    await on_text(update, _context(session, conn))
+    calls = update.effective_message.reply_text.await_args_list
+    assert calls[0].args[0] == "Corté."
+    assert calls[1].args[0] == action.description
+    assert calls[1].kwargs["reply_markup"].inline_keyboard[0][0].callback_data == f"p:ok:{action.id}"
+
+
 async def test_on_text_other_error_propagates_and_stops_typing(monkeypatch):
     monkeypatch.setattr(chat, "TYPING_INTERVAL", 0.01)
     started = asyncio.Event()

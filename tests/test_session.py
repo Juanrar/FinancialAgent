@@ -199,6 +199,34 @@ async def test_max_turns(conn, settings):
     assert e.value.user_message == MSG_MAX_TURNS
 
 
+async def test_failed_turn_keeps_notices_and_pending(conn, settings):
+    from financial_agent.store import contacts
+    from financial_agent.store.pending import create_action
+
+    contact = contacts.create_contact(conn, "Fede")
+    action = create_action(conn, "delete_contact", {"contact_id": contact.id})
+
+    def tools_ran(s):
+        s.turn.notices.append("(creé el contacto Fede)")
+        s.turn.pending.append(action)
+
+    session, _ = make_session(
+        conn, settings, [INIT_OK, result(subtype="error_max_turns", is_error=True)], on_query=tools_ran
+    )
+    with pytest.raises(AgentError) as e:
+        await session.send("hola")
+    assert e.value.user_message == MSG_MAX_TURNS + "\n(creé el contacto Fede)"
+    assert e.value.pending == [action]
+
+
+async def test_failed_turn_without_tools_has_no_extras(conn, settings):
+    session, _ = make_session(conn, settings, [INIT_OK, result(subtype="error_max_turns", is_error=True)])
+    with pytest.raises(AgentError) as e:
+        await session.send("hola")
+    assert e.value.user_message == MSG_MAX_TURNS
+    assert e.value.pending == []
+
+
 async def test_other_result_error_is_generic(conn, settings):
     session, _ = make_session(conn, settings, [INIT_OK, result(subtype="success", is_error=True)])
     with pytest.raises(AgentError) as e:

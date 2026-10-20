@@ -47,9 +47,10 @@ def limit_message(resets_at: int | None, tz: str) -> str:
 
 
 class AgentError(Exception):
-    def __init__(self, user_message: str):
+    def __init__(self, user_message: str, pending: list[PendingAction] | None = None):
         super().__init__(user_message)
         self.user_message = user_message
+        self.pending = pending or []
 
 
 @dataclass(frozen=True)
@@ -129,14 +130,30 @@ class AgentSession:
 
     async def send(self, text: str) -> AgentReply:
         async with self._lock:
+            # Limpia lo que haya dejado un turno anterior: si este falla antes de
+            # arrancar, no hay avisos ni botones propios que conservar.
+            self.turn.reset()
             try:
                 return await self._send(text)
+            except AgentError as error:
+                self._attach_turn_results(error)
+                raise
             except ClaudeSDKError as error:
                 logger.error("Error del SDK de Claude: %s", type(error).__name__)
                 await self._disconnect()
-                raise AgentError(MSG_GENERIC) from error
+                generic = AgentError(MSG_GENERIC)
+                self._attach_turn_results(generic)
+                raise generic from error
             finally:
                 self._schedule_idle()
+
+    def _attach_turn_results(self, error: AgentError) -> None:
+        # Si las herramientas ya cambiaron datos antes del error, Juan tiene que
+        # enterarse y poder confirmar las acciones pendientes que quedaron.
+        if self.turn.notices:
+            error.user_message = "\n".join([error.user_message, *self.turn.notices])
+            error.args = (error.user_message,)
+        error.pending = list(self.turn.pending)
 
     async def close(self) -> None:
         async with self._lock:
