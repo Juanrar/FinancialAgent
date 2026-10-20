@@ -195,3 +195,27 @@ async def test_callback_second_tap_no_note(conn):
     await on_pending_callback(update, context)
     assert query.edit_message_text.await_args.args[0].endswith("Esta acción ya se resolvió.")
     session.add_context_note.assert_not_called()
+
+
+async def test_on_text_typing_failure_keeps_reply():
+    async def slow(text):
+        await asyncio.sleep(0.01)
+        return AgentReply("ok", [])
+
+    context = _context(SimpleNamespace(send=slow))
+    context.bot.send_chat_action = AsyncMock(side_effect=RuntimeError("telegram"))
+    update = _text_update()
+    await on_text(update, context)
+    update.effective_message.reply_text.assert_awaited_once_with("ok")
+
+
+async def test_on_text_typing_failure_keeps_agent_error_message():
+    async def failing(text):
+        await asyncio.sleep(0.01)
+        raise AgentError("No pude hablar con Claude.")
+
+    context = _context(SimpleNamespace(send=failing))
+    context.bot.send_chat_action = AsyncMock(side_effect=RuntimeError("telegram"))
+    update = _text_update()
+    await on_text(update, context)
+    update.effective_message.reply_text.assert_awaited_once_with("No pude hablar con Claude.")

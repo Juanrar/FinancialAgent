@@ -42,7 +42,9 @@ def pending_keyboard(action_id: int) -> InlineKeyboardMarkup:
 
 async def _keep_typing(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
     while True:
-        await context.bot.send_chat_action(chat_id, ChatAction.TYPING)
+        # El indicador es cosmético: un error de Telegram no debe tapar la respuesta del agente.
+        with contextlib.suppress(Exception):
+            await context.bot.send_chat_action(chat_id, ChatAction.TYPING)
         await asyncio.sleep(TYPING_INTERVAL)
 
 
