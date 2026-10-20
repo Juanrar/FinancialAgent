@@ -43,3 +43,7 @@ def setup_logging(level: str, secrets: Iterable[str] = ()) -> None:
     # Las URLs de httpx incluyen el token del bot.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+    # A DEBUG, python-telegram-bot loguea cada update y los parámetros de cada llamada a la API.
+    logging.getLogger("telegram").setLevel(max(logging.INFO, logging.getLogger().level))
+    # El SDK mete en sus errores texto de la salida de Claude. La sesión ya loguea la clase.
+    logging.getLogger("claude_agent_sdk").setLevel(logging.CRITICAL)

@@ -31,3 +31,14 @@ def test_setup_logging_redacts_secrets_in_messages_and_tracebacks(capsys):
     assert "SECRETO123" not in out
     assert "***" in out
     assert "ValueError" in out
+
+
+def test_setup_logging_debug_keeps_libraries_quiet():
+    setup_logging("DEBUG")
+    try:
+        assert logging.getLogger().getEffectiveLevel() == logging.DEBUG
+        assert logging.getLogger("telegram").getEffectiveLevel() >= logging.INFO
+        assert not logging.getLogger("telegram.ext").isEnabledFor(logging.DEBUG)
+        assert logging.getLogger("claude_agent_sdk").getEffectiveLevel() == logging.CRITICAL
+    finally:
+        setup_logging("INFO")
