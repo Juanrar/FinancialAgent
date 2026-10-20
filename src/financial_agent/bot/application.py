@@ -6,6 +6,7 @@ from telegram.ext import (
     Application,
     ApplicationBuilder,
     ApplicationHandlerStop,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -15,6 +16,7 @@ from telegram.ext import (
 
 from financial_agent.agent.session import AgentSession
 from financial_agent.bot.awaiting import clear_awaiting
+from financial_agent.bot.chat import on_pending_callback, on_text
 from financial_agent.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -73,6 +75,8 @@ def register_handlers(application: Application) -> None:
     application.add_handler(MessageHandler(filters.COMMAND, reset_awaiting_on_command), group=-1)
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(~filters.TEXT & ~filters.COMMAND, unsupported_message))
+    application.add_handler(CallbackQueryHandler(on_pending_callback, pattern=r"^p:"))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     application.add_error_handler(error_handler)
 
 
