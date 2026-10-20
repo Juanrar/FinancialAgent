@@ -1,5 +1,5 @@
 CREATE TABLE contacts (
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
@@ -9,7 +9,7 @@ CREATE TABLE nicknames (
   PRIMARY KEY (contact_id, nickname)
 );
 CREATE TABLE destinations (
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   contact_id INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
   type TEXT NOT NULL CHECK (type IN ('email_mp', 'cbu_cvu', 'alias')),
   value TEXT NOT NULL,
@@ -19,12 +19,12 @@ CREATE TABLE destinations (
 );
 CREATE UNIQUE INDEX destinations_one_primary ON destinations(contact_id) WHERE is_primary = 1;
 CREATE TABLE notes (
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   text TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 CREATE TABLE pending_actions (
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   kind TEXT NOT NULL CHECK (kind IN ('delete_contact', 'delete_destination', 'update_destination_value', 'set_primary')),
   payload TEXT NOT NULL,
   description TEXT NOT NULL,

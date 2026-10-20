@@ -27,3 +27,11 @@ def test_missing_note_raises(conn):
         update_note(conn, 99, "x")
     with pytest.raises(NotFoundError):
         delete_note(conn, 99)
+
+
+def test_note_ids_are_not_reused_after_delete(conn):
+    first = add_note(conn, "uno")
+    second = add_note(conn, "dos")
+    delete_note(conn, second.id)
+    third = add_note(conn, "tres")
+    assert third.id > max(first.id, second.id)
