@@ -28,6 +28,8 @@ MSG_START = (
 )
 MSG_ONLY_TEXT = "Por ahora solo leo texto."
 MSG_ERROR = "Algo falló, probá de nuevo."
+MSG_EDITED = "No proceso mensajes editados. Mandalo de nuevo."
+MSG_UNKNOWN_COMMAND = "No conozco ese comando. Tengo /memory y /contactos."
 
 COMMANDS = [
     BotCommand("memory", "Ver y editar la memoria"),
@@ -46,6 +48,10 @@ async def owner_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not is_owner(user_id, owner_id):
         logger.warning("mensaje descartado de user_id=%s", user_id)
         raise ApplicationHandlerStop
+    chat = update.effective_chat
+    if chat is None or chat.type != "private":
+        logger.warning("mensaje descartado de user_id=%s: el chat no es privado", user_id)
+        raise ApplicationHandlerStop
 
 
 async def reset_awaiting_on_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -54,6 +60,14 @@ async def reset_awaiting_on_command(update: Update, context: ContextTypes.DEFAUL
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(MSG_START)
+
+
+async def edited_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.effective_message.reply_text(MSG_EDITED)
+
+
+async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.effective_message.reply_text(MSG_UNKNOWN_COMMAND)
 
 
 async def unsupported_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -73,15 +87,24 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 def register_handlers(application: Application) -> None:
     """Único lugar donde se registran los handlers."""
     application.add_handler(TypeHandler(Update, owner_gate), group=-2)
-    application.add_handler(MessageHandler(filters.COMMAND, reset_awaiting_on_command), group=-1)
+    new_message = filters.UpdateType.MESSAGE
+    application.add_handler(
+        MessageHandler(filters.COMMAND & new_message, reset_awaiting_on_command), group=-1
+    )
+    # Editar un mensaje viejo no debe volver a correr el agente ni completar un Awaiting.
+    application.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE, edited_message))
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("memory", memory_cmd.on_memory))
     application.add_handler(CallbackQueryHandler(memory_cmd.on_memory_callback, pattern=r"^m:"))
     application.add_handler(CommandHandler("contactos", contacts_cmd.on_contacts))
     application.add_handler(CallbackQueryHandler(contacts_cmd.on_contacts_callback, pattern=r"^[cd]:"))
-    application.add_handler(MessageHandler(~filters.TEXT & ~filters.COMMAND, unsupported_message))
+    # Último de los comandos: los conocidos ya cortaron antes dentro del grupo 0.
+    application.add_handler(MessageHandler(filters.COMMAND & new_message, unknown_command))
+    application.add_handler(
+        MessageHandler(~filters.TEXT & ~filters.COMMAND & new_message, unsupported_message)
+    )
     application.add_handler(CallbackQueryHandler(on_pending_callback, pattern=r"^p:"))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & new_message, on_text))
     application.add_error_handler(error_handler)
 
 

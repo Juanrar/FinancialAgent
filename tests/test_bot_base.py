@@ -76,7 +76,10 @@ async def test_owner_gate_drops_strangers(settings, caplog):
 
 
 async def test_owner_gate_lets_owner_pass(settings):
-    update = SimpleNamespace(effective_user=SimpleNamespace(id=settings.telegram_owner_id))
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=settings.telegram_owner_id),
+        effective_chat=SimpleNamespace(type="private"),
+    )
     await owner_gate(update, _context(settings))
 
 
