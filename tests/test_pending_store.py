@@ -7,6 +7,7 @@ from financial_agent.store.contacts import (
     create_contact,
     get_contact,
     get_destination,
+    update_destination_value,
 )
 from financial_agent.store.db import NotFoundError
 from financial_agent.store.pending import (
@@ -131,3 +132,28 @@ def test_confirm_with_validation_error_is_failed(conn):
 def test_create_for_missing_target(conn):
     with pytest.raises(NotFoundError):
         create_action(conn, "delete_contact", {"contact_id": 99}, now=T0)
+
+
+def test_confirm_fails_if_destinations_changed(conn):
+    c, d = _fede(conn)
+    a = create_action(conn, "delete_contact", {"contact_id": c.id}, now=T0)
+    add_destination(conn, c.id, "cbu_cvu", "0000003100000000000017")
+    r = confirm_action(conn, a.id, now=T0)
+    assert r.outcome == "fallida"
+    assert r.message == (
+        "No se pudo hacer: los datos cambiaron desde que lo pediste. Pedilo de nuevo."
+    )
+    assert r.action.status == "cancelada"
+    assert len(get_contact(conn, c.id).destinations) == 2
+
+
+def test_confirm_fails_if_old_value_changed(conn):
+    c, d = _fede(conn)
+    a = create_action(
+        conn, "update_destination_value", {"destination_id": d.id, "value": "fede.nuevo"}, now=T0
+    )
+    update_destination_value(conn, d.id, "fede.otro")
+    r = confirm_action(conn, a.id, now=T0)
+    assert r.outcome == "fallida"
+    assert r.message.endswith("Pedilo de nuevo.")
+    assert get_destination(conn, d.id).value == "fede.otro"

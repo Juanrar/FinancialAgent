@@ -18,6 +18,11 @@ Outcome = Literal["confirmada", "cancelada", "vencida", "ya_resuelta", "fallida"
 _MSG_EXPIRED = "Esta acción venció."
 _MSG_RESOLVED = "Esta acción ya se resolvió."
 _MSG_MISSING = "No se pudo hacer: el contacto o destino ya no existe."
+_MSG_CHANGED = "No se pudo hacer: los datos cambiaron desde que lo pediste. Pedilo de nuevo."
+
+
+class _Changed(Exception):
+    """La descripción actual ya no coincide con la que se mostró."""
 
 
 @dataclass(frozen=True)
@@ -137,16 +142,19 @@ def confirm_action(
             return _not_applied(conn, action_id)
         action = _get(conn, action_id)
         try:
+            if _describe(conn, action.kind, action.payload) != action.description:
+                raise _Changed
             _execute(conn, action)
-        except (NotFoundError, ValidationError) as error:
+        except (_Changed, NotFoundError, ValidationError) as error:
             conn.execute(
                 "UPDATE pending_actions SET status = 'cancelada' WHERE id = ?", (action_id,)
             )
-            message = (
-                _MSG_MISSING
-                if isinstance(error, NotFoundError)
-                else f"No se pudo hacer: {error}"
-            )
+            if isinstance(error, NotFoundError):
+                message = _MSG_MISSING
+            elif isinstance(error, _Changed):
+                message = _MSG_CHANGED
+            else:
+                message = f"No se pudo hacer: {error}"
             return Resolution("fallida", message, _get(conn, action_id))
     return Resolution("confirmada", f"Listo: {action.description}.", action)
 
