@@ -17,7 +17,7 @@ def create_app(settings: Settings | None = None, with_bot: bool = True) -> FastA
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         active = settings or load_settings()
-        setup_logging(active.log_level)
+        setup_logging(active.log_level, [active.telegram_bot_token, active.claude_oauth_token])
         conn = connect(active.db_path)
         try:
             migrate(conn)

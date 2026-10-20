@@ -98,3 +98,18 @@ async def test_error_handler_without_chat_does_not_reply(caplog):
     context = SimpleNamespace(error=ValueError("x"), bot=bot)
     await error_handler(None, context)
     bot.send_message.assert_not_called()
+
+
+async def test_start_bot_sanitizes_startup_errors():
+    from telegram.error import InvalidToken
+
+    from financial_agent.bot.application import start_bot
+
+    token_error = InvalidToken("The token `1:abc` was rejected by the server.")
+    fake = SimpleNamespace(initialize=AsyncMock(side_effect=token_error))
+    with pytest.raises(RuntimeError) as info:
+        await start_bot(fake)
+    assert "1:abc" not in str(info.value)
+    assert "InvalidToken" in str(info.value)
+    assert info.value.__cause__ is None
+    assert info.value.__context__ is None

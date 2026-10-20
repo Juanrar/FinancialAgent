@@ -89,10 +89,17 @@ def build_application(
 
 
 async def start_bot(app: Application) -> None:
-    await app.initialize()
-    await app.start()
-    await app.bot.set_my_commands(COMMANDS)
-    await app.updater.start_polling()
+    failure = None
+    try:
+        await app.initialize()
+        await app.start()
+        await app.bot.set_my_commands(COMMANDS)
+        await app.updater.start_polling()
+    except Exception as err:
+        failure = type(err).__name__
+    if failure is not None:
+        # Fuera del except para no encadenar la excepción original: su texto puede traer el token.
+        raise RuntimeError(f"no se pudo iniciar el bot: {failure}") from None
 
 
 async def stop_bot(app: Application) -> None:
