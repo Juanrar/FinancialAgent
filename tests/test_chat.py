@@ -232,3 +232,16 @@ async def test_on_text_typing_failure_keeps_agent_error_message():
     update = _text_update()
     await on_text(update, context)
     update.effective_message.reply_text.assert_awaited_once_with("No pude hablar con Claude.")
+
+
+async def test_callback_notes_agent_before_editing_message(conn):
+    contact = contacts.create_contact(conn, "Fede")
+    action = create_action(conn, "delete_contact", {"contact_id": contact.id})
+    session = MagicMock()
+    update, query = _callback_update(f"p:ok:{action.id}")
+    query.edit_message_text = AsyncMock(side_effect=RuntimeError("telegram"))
+    try:
+        await on_pending_callback(update, _context(session, conn))
+    except RuntimeError:
+        pass
+    session.add_context_note.assert_called_once_with(f"Juan confirmó: {action.description}")

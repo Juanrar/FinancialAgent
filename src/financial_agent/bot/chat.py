@@ -90,9 +90,10 @@ async def on_pending_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     resolve = confirm_action if choice == "ok" else cancel_action
     resolution = resolve(conn, action_id)
     description = resolution.action.description
-    await query.edit_message_text(f"{description}\n\n{resolution.message}")
     session = context.application.bot_data["session"]
+    # Primero el aviso al agente: si falla la edición del mensaje, igual se enteró del cambio.
     if resolution.outcome == "confirmada":
         session.add_context_note(f"Juan confirmó: {description}")
     elif resolution.outcome == "cancelada":
         session.add_context_note(f"Juan canceló: {description}")
+    await query.edit_message_text(f"{description}\n\n{resolution.message}")
