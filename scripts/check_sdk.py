@@ -91,8 +91,7 @@ def build_options(args) -> tuple[ClaudeAgentOptions, Path, Path | None]:
     return options, projects, tmp_cwd
 
 
-async def run(options: ClaudeAgentOptions) -> str | None:
-    session_id = None
+async def run(options: ClaudeAgentOptions, state: dict) -> None:
     async with ClaudeSDKClient(options) as client:
         try:
             info = await client.get_server_info()
@@ -109,6 +108,7 @@ async def run(options: ClaudeAgentOptions) -> str | None:
             print("mensaje:", type(msg).__name__)
             if isinstance(msg, SystemMessage) and msg.subtype == "init":
                 data = msg.data
+                state["session_id"] = data.get("session_id")
                 print("  init keys:", sorted(data))
                 print("  init tools:", data.get("tools"))
                 print("  init mcp_servers:", data.get("mcp_servers"))
@@ -119,12 +119,11 @@ async def run(options: ClaudeAgentOptions) -> str | None:
             elif isinstance(msg, RateLimitEvent):
                 print("  rate_limit:", msg)
             elif isinstance(msg, ResultMessage):
-                session_id = msg.session_id
+                state["session_id"] = msg.session_id
                 print("  subtype:", msg.subtype)
                 print("  is_error:", msg.is_error)
                 print("  result:", msg.result)
                 print("  session_id:", msg.session_id)
-    return session_id
 
 
 def report_files(projects: Path, session_id: str | None, delete_session: bool) -> None:
@@ -133,7 +132,10 @@ def report_files(projects: Path, session_id: str | None, delete_session: bool) -
         print(f"{projects} no existe")
         return
     if delete_session:
-        found = list(projects.rglob(f"{session_id}.jsonl")) if session_id else []
+        if session_id is None:
+            print("no se pudo verificar: no hay session_id")
+            return
+        found = list(projects.rglob(f"{session_id}.jsonl"))
         print(f"archivos .jsonl de la sesión {session_id}: {len(found)}")
         for path in found:
             print("  ", path)
@@ -153,11 +155,11 @@ def main() -> None:
     parser.add_argument("--fallback-permissions", action="store_true")
     args = parser.parse_args()
     options, projects, tmp_cwd = build_options(args)
-    session_id = None
+    state: dict = {"session_id": None}
     try:
-        session_id = asyncio.run(run(options))
+        asyncio.run(run(options, state))
     finally:
-        report_files(projects, session_id, args.existing_login)
+        report_files(projects, state["session_id"], args.existing_login)
         if tmp_cwd:
             shutil.rmtree(tmp_cwd, ignore_errors=True)
 
