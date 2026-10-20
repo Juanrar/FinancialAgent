@@ -1,0 +1,14 @@
+services:
+  app:
+    build: .
+    env_file: .env
+    environment:
+      - TZ=America/Argentina/Buenos_Aires
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
