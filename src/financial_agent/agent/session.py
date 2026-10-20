@@ -75,6 +75,7 @@ def build_options(
         max_turns=MAX_TURNS,
         cwd=settings.agent_cwd,
         extra_args={"no-session-persistence": None},
+        verbatim_prompts=True,
         env={
             "CLAUDE_CONFIG_DIR": str(settings.claude_config_dir),
             "CLAUDE_CODE_OAUTH_TOKEN": settings.claude_oauth_token,

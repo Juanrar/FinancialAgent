@@ -261,6 +261,7 @@ def test_build_options_isolation(settings):
     assert "no-session-persistence" in o.extra_args
     assert o.env["CLAUDE_CONFIG_DIR"] == str(settings.claude_config_dir)
     assert o.permission_mode == "dontAsk"
+    assert o.verbatim_prompts is True
     assert settings.claude_config_dir.is_dir() and settings.agent_cwd.is_dir()
 
 

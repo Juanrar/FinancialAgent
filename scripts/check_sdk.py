@@ -85,6 +85,7 @@ def build_options(args) -> tuple[ClaudeAgentOptions, Path, Path | None]:
         cwd=cwd,
         env=env,
         extra_args={"no-session-persistence": None},
+        verbatim_prompts=True,
         system_prompt="Sos un probador. Respondé corto.",
         **kwargs,
     )
