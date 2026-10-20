@@ -24,6 +24,16 @@ def connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
+def _apply_script(conn: sqlite3.Connection, number: int, sql: str) -> None:
+    """Aplica un script y sube user_version en una sola transacción."""
+    try:
+        conn.executescript(f"BEGIN;\n{sql}\nPRAGMA user_version = {number};\nCOMMIT;")
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+
+
 def migrate(conn: sqlite3.Connection) -> int:
     current = conn.execute("PRAGMA user_version").fetchone()[0]
     scripts = []
@@ -34,7 +44,6 @@ def migrate(conn: sqlite3.Connection) -> int:
     for number, entry in sorted(scripts, key=lambda s: s[0]):
         if number <= current:
             continue
-        conn.executescript(entry.read_text(encoding="utf-8"))
-        conn.execute(f"PRAGMA user_version = {number}")
+        _apply_script(conn, number, entry.read_text(encoding="utf-8"))
         current = number
     return current
