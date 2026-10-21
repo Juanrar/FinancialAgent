@@ -23,8 +23,7 @@ from financial_agent.config import Settings
 logger = logging.getLogger(__name__)
 
 MSG_START = (
-    "Hola, Juan. Escribime como a una persona. "
-    "Con /memory y /contactos ves y editás lo que guardé."
+    "Hola, Juan. Soy tu agente personal de finansas. ¿En que puedo ayudarte hoy? "
 )
 MSG_ONLY_TEXT = "Por ahora solo leo texto."
 MSG_ERROR = "Algo falló, probá de nuevo."
