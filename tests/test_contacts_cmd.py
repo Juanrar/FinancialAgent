@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from fakes import FakeWallet
+
 from financial_agent.bot.awaiting import Awaiting, get_awaiting, set_awaiting
 from financial_agent.bot.contacts_cmd import (
     contact_keyboard,
@@ -10,6 +12,8 @@ from financial_agent.bot.contacts_cmd import (
     on_contacts,
     on_contacts_callback,
 )
+from financial_agent.bot.fiwind_session import MSG_SESSION_EXPIRED
+from financial_agent.fiwind.client import SessionExpired
 from financial_agent.store import contacts as store
 from financial_agent.store.contacts import Contact, Destination
 
@@ -65,7 +69,7 @@ def _context(conn, settings):
 
 def _message_update(text=None):
     message = SimpleNamespace(text=text, reply_text=AsyncMock())
-    return SimpleNamespace(effective_message=message)
+    return SimpleNamespace(effective_message=message, effective_chat=SimpleNamespace(id=1))
 
 
 def _callback_update(data):
@@ -332,3 +336,60 @@ async def test_destination_value_gone(conn, settings):
     await handle_awaiting(update, context, awaiting)
     update.effective_message.reply_text.assert_awaited_with("Ese destino ya no existe.")
     assert get_awaiting(context) is None
+
+
+def _wallet_context(conn, settings, wallet):
+    context = _context(conn, settings)
+    context.bot = SimpleNamespace(send_message=AsyncMock())
+    context.application.bot_data["wallet"] = wallet
+    return context
+
+
+async def test_add_destination_verifies(conn, settings):
+    contact = store.create_contact(conn, "Fede")
+    context = _wallet_context(conn, settings, FakeWallet())
+    awaiting = Awaiting("destination_add", contact.id)
+    set_awaiting(context, awaiting)
+    update = _message_update("fede.mp")
+    await handle_awaiting(update, context, awaiting)
+    replies = [c.args[0] for c in update.effective_message.reply_text.await_args_list]
+    assert any("Verificado en Fiwind: Federico Pérez, Brubank" in r for r in replies)
+    assert store.get_contact(conn, contact.id).destinations[0].verified
+
+
+async def test_add_destination_unverified_reason(conn, settings):
+    contact = store.create_contact(conn, "Fede")
+    context = _wallet_context(conn, settings, FakeWallet(available=False))
+    update = _message_update("fede.mp")
+    await handle_awaiting(update, context, Awaiting("destination_add", contact.id))
+    replies = [c.args[0] for c in update.effective_message.reply_text.await_args_list]
+    assert any(r.startswith("Sin verificar: ") and "agent-browser" in r for r in replies)
+
+
+async def test_add_destination_session_expired_sends_notice(conn, settings):
+    contact = store.create_contact(conn, "Fede")
+    wallet = FakeWallet(lookup_error=SessionExpired("buscar"))
+    context = _wallet_context(conn, settings, wallet)
+    update = _message_update("fede.mp")
+    await handle_awaiting(update, context, Awaiting("destination_add", contact.id))
+    replies = [c.args[0] for c in update.effective_message.reply_text.await_args_list]
+    assert any(r.startswith("Sin verificar: ") for r in replies)
+    assert context.bot.send_message.await_args.args[1] == MSG_SESSION_EXPIRED
+
+
+async def test_add_email_destination_skips_verification(conn, settings):
+    contact = store.create_contact(conn, "Fede")
+    wallet = FakeWallet()
+    context = _wallet_context(conn, settings, wallet)
+    update = _message_update("fede@example.com")
+    await handle_awaiting(update, context, Awaiting("destination_add", contact.id))
+    assert wallet.calls == []
+
+
+def test_format_contact_shows_verified_holder(conn):
+    contact = store.create_contact(conn, "Fede")
+    dest = store.add_destination(conn, contact.id, "alias", "fede.mp")
+    store.set_verification(conn, dest.id, "Federico Pérez", CVU, "Brubank")
+    assert "1. alias fede.mp (principal), Federico Pérez, Brubank" in format_contact(
+        store.get_contact(conn, contact.id)
+    )

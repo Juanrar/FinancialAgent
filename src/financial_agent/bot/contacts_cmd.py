@@ -3,9 +3,12 @@ from telegram.ext import ContextTypes
 
 from financial_agent.bot.awaiting import Awaiting, clear_awaiting, set_awaiting
 from financial_agent.bot.callback_data import make_callback, parse_callback
+from financial_agent.bot.fiwind_session import send_session_expired
+from financial_agent.fiwind.client import FiwindUnavailable, SessionExpired
 from financial_agent.store import contacts as store
-from financial_agent.store.contacts import Contact
+from financial_agent.store.contacts import Contact, Destination
 from financial_agent.store.db import NotFoundError
+from financial_agent.transfers import TRANSFERABLE_TYPES, verify_destination
 from financial_agent.validation import DESTINATION_LABELS, ValidationError, detect_destination_type
 
 CONTACT = "c"
@@ -35,7 +38,8 @@ def format_contact(contact: Contact) -> str:
         lines.append("Destinos:")
         for n, dest in enumerate(contact.destinations, start=1):
             suffix = " (principal)" if dest.is_primary else ""
-            lines.append(f"{n}. {DESTINATION_LABELS[dest.type]} {dest.value}{suffix}")
+            holder = f", {dest.holder}, {dest.bank}" if dest.verified else ""
+            lines.append(f"{n}. {DESTINATION_LABELS[dest.type]} {dest.value}{suffix}{holder}")
     return "\n".join(lines)
 
 
@@ -183,18 +187,36 @@ async def on_contacts_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def _apply_awaiting(
     context: ContextTypes.DEFAULT_TYPE, awaiting: Awaiting, text: str
-) -> int:
-    """Aplica el texto de Juan y devuelve el id del contacto a redibujar."""
+) -> tuple[int, Destination | None]:
+    """Aplica el texto de Juan. Devuelve el id del contacto a redibujar y el destino
+    transferible recién agregado, si hay."""
     conn = _conn(context)
     if awaiting.kind == "contact_rename":
-        return store.rename_contact(conn, awaiting.target_id, text).id
+        return store.rename_contact(conn, awaiting.target_id, text).id, None
     if awaiting.kind == "contact_nicknames":
         nicknames = [part for part in text.split(",") if part.strip()]
-        return store.replace_nicknames(conn, awaiting.target_id, nicknames).id
+        return store.replace_nicknames(conn, awaiting.target_id, nicknames).id, None
     if awaiting.kind == "destination_add":
-        store.add_destination(conn, awaiting.target_id, detect_destination_type(text), text)
-        return awaiting.target_id
-    return store.update_destination_value(conn, awaiting.target_id, text).contact_id
+        dest = store.add_destination(conn, awaiting.target_id, detect_destination_type(text), text)
+        return awaiting.target_id, dest if dest.type in TRANSFERABLE_TYPES else None
+    return store.update_destination_value(conn, awaiting.target_id, text).contact_id, None
+
+
+async def _verify_new_destination(
+    context: ContextTypes.DEFAULT_TYPE, chat_id: int, destination: Destination
+) -> str:
+    """Verifica el destino en Fiwind y devuelve el texto para Juan."""
+    wallet = context.application.bot_data["wallet"]
+    try:
+        verified = await verify_destination(_conn(context), wallet, destination)
+    except ValidationError as error:
+        return f"Sin verificar: {error}"
+    except SessionExpired:
+        await send_session_expired(context.bot, chat_id)
+        return "Sin verificar: la sesión de Fiwind venció."
+    except FiwindUnavailable as error:
+        return f"Sin verificar: {error.reason}"
+    return f"Verificado en Fiwind: {verified.holder}, {verified.bank}"
 
 
 async def handle_awaiting(
@@ -202,7 +224,12 @@ async def handle_awaiting(
 ) -> None:
     message = update.effective_message
     try:
-        contact_id = await _apply_awaiting(context, awaiting, message.text)
+        contact_id, new_destination = await _apply_awaiting(context, awaiting, message.text)
+        verification = None
+        if new_destination is not None and "wallet" in context.application.bot_data:
+            verification = await _verify_new_destination(
+                context, update.effective_chat.id, new_destination
+            )
         rendered = _render_contact(context, contact_id)
     except ValidationError as error:
         await message.reply_text(str(error))
@@ -215,3 +242,5 @@ async def handle_awaiting(
     clear_awaiting(context)
     text, keyboard = rendered
     await message.reply_text(text, reply_markup=keyboard)
+    if verification is not None:
+        await message.reply_text(verification)

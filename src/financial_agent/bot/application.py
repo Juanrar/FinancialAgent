@@ -15,10 +15,11 @@ from telegram.ext import (
 )
 
 from financial_agent.agent.session import AgentSession
-from financial_agent.bot import contacts_cmd, memory_cmd
+from financial_agent.bot import contacts_cmd, fiwind_session, memory_cmd, transfer_flow
 from financial_agent.bot.awaiting import clear_awaiting
 from financial_agent.bot.chat import on_pending_callback, on_text
 from financial_agent.config import Settings
+from financial_agent.fiwind.client import FiwindClient
 
 logger = logging.getLogger(__name__)
 
@@ -103,17 +104,23 @@ def register_handlers(application: Application) -> None:
         MessageHandler(~filters.TEXT & ~filters.COMMAND & new_message, unsupported_message)
     )
     application.add_handler(CallbackQueryHandler(on_pending_callback, pattern=r"^p:"))
+    application.add_handler(CallbackQueryHandler(fiwind_session.on_fiwind_callback, pattern=r"^f:"))
+    application.add_handler(CallbackQueryHandler(transfer_flow.on_manual_callback, pattern=r"^t:"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & new_message, on_text))
     application.add_error_handler(error_handler)
 
 
 def build_application(
-    settings: Settings, conn: sqlite3.Connection, session: AgentSession
+    settings: Settings,
+    conn: sqlite3.Connection,
+    session: AgentSession,
+    wallet: FiwindClient | None = None,
 ) -> Application:
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
     application.bot_data["settings"] = settings
     application.bot_data["conn"] = conn
     application.bot_data["session"] = session
+    application.bot_data["wallet"] = FiwindClient(None) if wallet is None else wallet
     application.bot_data["awaiting_handlers"] = {
         "note_edit": memory_cmd.handle_awaiting,
         "contact_rename": contacts_cmd.handle_awaiting,

@@ -60,6 +60,13 @@ def test_build_application(settings, conn):
         "destination_value",
     }
     assert application.concurrent_updates == 1
+    assert application.bot_data["wallet"].available is False
+
+
+def test_build_application_keeps_wallet(settings, conn):
+    wallet = object()
+    application = build_application(settings, conn, object(), wallet)
+    assert application.bot_data["wallet"] is wallet
 
 
 def _context(settings):

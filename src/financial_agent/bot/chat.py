@@ -8,7 +8,9 @@ from telegram.ext import ContextTypes
 from financial_agent.agent.session import AgentError
 from financial_agent.bot.awaiting import get_awaiting
 from financial_agent.bot.callback_data import make_callback, parse_callback
-from financial_agent.store.pending import cancel_action, confirm_action
+from financial_agent.bot.fiwind_session import send_session_expired
+from financial_agent.bot.transfer_flow import confirm_transfer
+from financial_agent.store.pending import agent_text, cancel_action, confirm_action, get_action
 
 PREFIX = "p"
 TYPING_INTERVAL = 4
@@ -72,6 +74,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except AgentError as error:
         await message.reply_text(error.user_message)
         await _send_pending(message, error.pending)
+        if session.turn.session_expired:
+            await send_session_expired(context.bot, update.effective_chat.id)
         return
     finally:
         typing.cancel()
@@ -84,6 +88,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     elif not reply.pending:
         await message.reply_text(MSG_NOTHING)
     await _send_pending(message, reply.pending)
+    if reply.session_expired:
+        await send_session_expired(context.bot, update.effective_chat.id)
 
 
 async def on_pending_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -91,13 +97,17 @@ async def on_pending_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.answer()
     _, choice, action_id = parse_callback(query.data)
     conn = context.application.bot_data["conn"]
+    if choice == "ok" and get_action(conn, action_id).kind == "transfer":
+        await confirm_transfer(query, context, action_id)
+        return
     resolve = confirm_action if choice == "ok" else cancel_action
     resolution = resolve(conn, action_id)
     description = resolution.action.description
     session = context.application.bot_data["session"]
     # Primero el aviso al agente: si falla la edición del mensaje, igual se enteró del cambio.
+    # A Claude le llega agent_text, nunca la descripción con datos leídos de Fiwind.
     if resolution.outcome == "confirmada":
-        session.add_context_note(f"Juan confirmó: {description}")
+        session.add_context_note(f"Juan confirmó: {agent_text(resolution.action)}")
     elif resolution.outcome == "cancelada":
-        session.add_context_note(f"Juan canceló: {description}")
+        session.add_context_note(f"Juan canceló: {agent_text(resolution.action)}")
     await query.edit_message_text(f"{description}\n\n{resolution.message}")
