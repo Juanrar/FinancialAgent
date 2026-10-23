@@ -136,7 +136,9 @@ async def test_without_browser():
     assert await client.withdraw(ORDER) == NotSent(STEP_OPEN, "agent-browser no está instalado")
     with pytest.raises(FiwindUnavailable):
         await client.lookup("x.y.z")
-    assert await client.check_session() is False
+    with pytest.raises(FiwindUnavailable) as info:
+        await client.check_session()
+    assert info.value.reason == "agent-browser no está instalado"
 
 
 async def test_operations_are_serialized():
@@ -145,7 +147,7 @@ async def test_operations_are_serialized():
     await asyncio.gather(client.lookup("a.b.c"), client.lookup("d.e.f"))
     opens = [i for i, c in enumerate(browser.calls) if c[0] == "open"]
     closes = [i for i, c in enumerate(browser.calls) if c == ("close",)]
-    assert opens[1] > closes[1]  # el segundo open llega después del close final del primero
+    assert opens[1] > closes[2]  # el segundo open llega después del close final del primero
 
 
 async def test_read_balance_and_session():
@@ -171,3 +173,39 @@ async def test_login_window():
     assert isinstance(await client.withdraw(ORDER), NotSent)
     assert await client.finish_login() is True
     assert browser.calls[-1] == ("close",)
+
+
+async def test_check_session_raises_on_login_window_and_browser_error():
+    client, _ = _client({("get", "url"): PANEL_URL})
+    await client.open_login_window()
+    with pytest.raises(FiwindUnavailable) as info:
+        await client.check_session()
+    assert (info.value.step, info.value.reason) == (STEP_OPEN, "la ventana de login está abierta")
+    client, _ = _client({("wait", "--load"): RuntimeError()})
+    with pytest.raises(FiwindUnavailable) as info:
+        await client.check_session()
+    assert info.value.step == STEP_OPEN
+
+
+async def test_cancelled_withdraw_keeps_lock_until_thread_finishes():
+    client, browser = _client()
+    browser.delay = 0.02
+    task = asyncio.create_task(client.withdraw(ORDER))
+    await asyncio.sleep(0.15)
+    other = asyncio.create_task(client.lookup("a.b.c"))
+    task.cancel()
+    await asyncio.sleep(0)
+    assert client._lock.locked()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not other.done() or browser.calls.count(("close",)) >= 2
+    await other
+    # los comandos del withdraw terminan antes de que empiece el lookup
+    first_open = browser.calls.index(("open", WITHDRAWAL_URL, None))
+    second_open = browser.calls.index(("open", WITHDRAWAL_URL, None), first_open + 1)
+    withdraw_calls = browser.calls[:second_open]
+    assert ("fill", DESTINATION_INPUT, "a.b.c") not in withdraw_calls
+    # close inicial y final del withdraw, más el close inicial del lookup
+    assert withdraw_calls.count(("close",)) == 3
+    assert withdraw_calls[-2:] == [("close",), ("close",)]
+    assert SEND in withdraw_calls

@@ -116,17 +116,11 @@ class FiwindClient:
     # --- operaciones públicas ---
 
     async def check_session(self) -> bool:
-        if self._browser is None:
-            return False
         async with self._lock:
-            if self._login_open:
-                return False
-            try:
-                return await asyncio.to_thread(self._check_session_sync)
-            except Exception as exc:
-                logger.warning("fiwind check_session: paso=%s resultado=%s",
-                               self._step, type(exc).__name__)
-                return False
+            self._require_ready()
+            result = await self._guarded("check_session", self._check_session_sync)
+            logger.info("fiwind check_session: resultado=%s", "activa" if result else "vencida")
+            return result
 
     async def lookup(self, destination: str) -> Recipient | None:
         async with self._lock:
@@ -143,14 +137,12 @@ class FiwindClient:
                 return NotSent(STEP_OPEN, LOGIN_OPEN)
             self._step = STEP_OPEN
             try:
-                outcome = await asyncio.to_thread(self._withdraw_sync, order)
+                outcome = await self._exclusive("withdraw", self._withdraw_sync, order)
             except Exception as exc:
                 # No debería pasar: _withdraw_sync atrapa todo. Si pasa, solo
                 # sabemos que llegó hasta self._step.
                 outcome = (Unconfirmed(self._step) if self._step in (STEP_SEND, STEP_RESULT)
                            else NotSent(self._step, _reason(exc)))
-            finally:
-                await asyncio.to_thread(self._browser.close)
             logger.info("fiwind withdraw: paso=%s resultado=%s", self._step,
                         type(outcome).__name__)
             return outcome
@@ -207,12 +199,39 @@ class FiwindClient:
         if self._login_open:
             raise FiwindUnavailable(STEP_OPEN, LOGIN_OPEN)
 
+    async def _exclusive(self, name: str, fn, *args):
+        """Corre fn y el cierre del navegador en un solo hilo.
+
+        Si cancelan la tarea, el hilo no se puede frenar: se espera acá, con el
+        lock tomado, a que termine antes de propagar la cancelación.
+        """
+        browser = self._browser
+
+        def job():
+            try:
+                return fn(*args)
+            finally:
+                browser.close()
+
+        fut = asyncio.ensure_future(asyncio.to_thread(job))
+        try:
+            return await asyncio.shield(fut)
+        except asyncio.CancelledError:
+            while not fut.done():
+                try:
+                    await asyncio.wait([fut])
+                except asyncio.CancelledError:
+                    pass
+            result = None if fut.cancelled() or fut.exception() else fut.result()
+            logger.warning("fiwind %s: cancelada, paso=%s resultado=%s", name, self._step,
+                           type(result).__name__)
+            raise
+
     async def _guarded(self, name: str, fn, *args):
-        """Corre fn en un hilo, cierra el navegador y traduce errores."""
-        assert self._browser is not None
+        """Corre fn con cierre del navegador y traduce errores."""
         self._step = STEP_OPEN
         try:
-            return await asyncio.to_thread(fn, *args)
+            return await self._exclusive(name, fn, *args)
         except SessionExpired:
             logger.info("fiwind %s: paso=%s resultado=SessionExpired", name, self._step)
             raise
@@ -222,8 +241,6 @@ class FiwindClient:
             logger.warning("fiwind %s: paso=%s resultado=%s", name, self._step,
                            type(exc).__name__)
             raise FiwindUnavailable(self._step, _reason(exc)) from exc
-        finally:
-            await asyncio.to_thread(self._browser.close)
 
     # --- parte sincrónica (corre en un hilo) ---
 
@@ -236,14 +253,11 @@ class FiwindClient:
             raise SessionExpired(STEP_OPEN)
 
     def _check_session_sync(self) -> bool:
-        self._step = STEP_OPEN
         try:
             self._open_panel()
             return True
         except SessionExpired:
             return False
-        finally:
-            self._browser.close()
 
     def _read_balance_sync(self) -> int | None:
         self._open_panel()
