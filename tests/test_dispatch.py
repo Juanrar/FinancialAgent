@@ -70,11 +70,11 @@ async def test_new_text_still_reaches_agent(app, settings, replies):
 async def test_unknown_command_gets_reply(app, settings, replies):
     await app.process_update(_update(app, settings.telegram_owner_id, "/nuevo"))
     replies.assert_awaited_once_with(MSG_UNKNOWN_COMMAND)
-    assert MSG_UNKNOWN_COMMAND == "No conozco ese comando. Tengo /memory y /contactos."
+    assert MSG_UNKNOWN_COMMAND == "No conozco ese comando. Tengo /memory, /contactos y /rutinas."
     app.bot_data["session"].send.assert_not_awaited()
 
 
-@pytest.mark.parametrize("command", ["/start", "/memory", "/contactos"])
+@pytest.mark.parametrize("command", ["/start", "/memory", "/contactos", "/rutinas"])
 async def test_known_commands_do_not_get_unknown_reply(app, settings, replies, command):
     await app.process_update(_update(app, settings.telegram_owner_id, command))
     assert all(call.args[0] != MSG_UNKNOWN_COMMAND for call in replies.await_args_list)
