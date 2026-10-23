@@ -245,3 +245,27 @@ async def test_callback_notes_agent_before_editing_message(conn):
     except RuntimeError:
         pass
     session.add_context_note.assert_called_once_with(f"Juan confirmó: {action.description}")
+
+
+async def test_forwarded_message_gets_prefix(conn):
+    sent = []
+
+    async def send(text):
+        sent.append(text)
+        return AgentReply("ok", [])
+
+    update = _text_update("hola")
+    update.effective_message.forward_origin = object()
+    await on_text(update, _context(SimpleNamespace(send=send), conn))
+    assert sent == ["[Mensaje reenviado]\nhola"]
+
+
+async def test_own_message_has_no_prefix(conn):
+    sent = []
+
+    async def send(text):
+        sent.append(text)
+        return AgentReply("ok", [])
+
+    await on_text(_text_update("hola"), _context(SimpleNamespace(send=send), conn))
+    assert sent == ["hola"]

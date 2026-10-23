@@ -172,11 +172,10 @@ class AgentSession:
         )
 
     async def _open(self) -> ClaudeSDKClient:
-        # get_mcp_status() no lista los servidores antes del primer query
-        # (docs/sdk-check.md), así que las herramientas se verifican recién en
-        # el init. El primer mensaje de cada sesión llega a Claude antes de ese
-        # chequeo; mientras tanto allowed_tools y permission_mode="dontAsk"
-        # impiden que corra una herramienta que no sea del proyecto.
+        # Las herramientas se verifican en el mensaje init porque
+        # get_mcp_status() devuelve una lista vacía antes del primer query.
+        # Hasta ese chequeo, allowed_tools y permission_mode="dontAsk"
+        # impiden que corra una herramienta ajena.
         notes = list_notes(self._conn)
         server = build_server(self._conn, self.turn)
         options = build_options(self._settings, build_system_prompt(notes), server)

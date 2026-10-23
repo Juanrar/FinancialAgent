@@ -13,6 +13,7 @@ from financial_agent.store.pending import cancel_action, confirm_action
 PREFIX = "p"
 TYPING_INTERVAL = 4
 MSG_NOTHING = "No tengo nada para responder."
+FORWARDED_PREFIX = "[Mensaje reenviado]\n"
 
 
 def split_message(text: str, limit: int = 4096) -> list[str]:
@@ -62,9 +63,12 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     message = update.effective_message
     session = context.application.bot_data["session"]
+    text = message.text
+    if getattr(message, "forward_origin", None) is not None:
+        text = FORWARDED_PREFIX + text
     typing = asyncio.create_task(_keep_typing(context, update.effective_chat.id))
     try:
-        reply = await session.send(message.text)
+        reply = await session.send(text)
     except AgentError as error:
         await message.reply_text(error.user_message)
         await _send_pending(message, error.pending)

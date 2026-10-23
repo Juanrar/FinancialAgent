@@ -49,3 +49,23 @@ def test_detect_destination_type():
 
 def test_normalize_text():
     assert normalize_text("  Martín   PÉREZ ") == "martin perez"
+
+
+def test_cbu_rejects_unicode_digits():
+    value = "٠" * 22  # ceros arábigo-índicos: str.isdigit() los acepta
+    assert not cbu_check_digits_ok(value)
+    with pytest.raises(ValidationError):
+        validate_destination("cbu_cvu", value)
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("12345678", "alias"),
+    ("12345678901234567890", "alias"),
+    ("0000168300000000123459", "cbu_cvu"),
+    ("00001683 0000000012345-9", "cbu_cvu"),
+    ("000016830000000012345", "cbu_cvu"),  # 21 dígitos: CBU mal tipeado
+    ("fede@mail.com", "email_mp"),
+    ("fede.mp", "alias"),
+])
+def test_detect_destination_type(value, expected):
+    assert detect_destination_type(value) == expected

@@ -116,11 +116,14 @@ def _execute(conn: sqlite3.Connection, action: PendingAction) -> None:
         raise ValueError(f"Tipo de acción desconocido: {action.kind}")
 
 
-def _not_applied(conn: sqlite3.Connection, action_id: int) -> Resolution:
+def _not_applied(conn: sqlite3.Connection, action_id: int, now: datetime) -> Resolution:
     """Resuelve una acción que ya no está pendiente o que venció."""
     action = _get(conn, action_id)
     if action.status == "pendiente":
-        conn.execute("UPDATE pending_actions SET status = 'vencida' WHERE id = ?", (action_id,))
+        conn.execute(
+            "UPDATE pending_actions SET status = 'vencida', resolved_at = ? WHERE id = ?",
+            (_iso(now), action_id),
+        )
         return Resolution("vencida", _MSG_EXPIRED, _get(conn, action_id))
     if action.status == "vencida":
         return Resolution("vencida", _MSG_EXPIRED, action)
@@ -139,7 +142,7 @@ def confirm_action(
             (stamp, action_id, stamp),
         )
         if cur.rowcount == 0:
-            return _not_applied(conn, action_id)
+            return _not_applied(conn, action_id, now)
         action = _get(conn, action_id)
         try:
             if _describe(conn, action.kind, action.payload) != action.description:
@@ -171,7 +174,7 @@ def cancel_action(
             (stamp, action_id, stamp),
         )
         if cur.rowcount == 0:
-            return _not_applied(conn, action_id)
+            return _not_applied(conn, action_id, now)
     return Resolution("cancelada", "Cancelado.", _get(conn, action_id))
 
 

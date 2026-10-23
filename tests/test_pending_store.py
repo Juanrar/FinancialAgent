@@ -157,3 +157,12 @@ def test_confirm_fails_if_old_value_changed(conn):
     assert r.outcome == "fallida"
     assert r.message.endswith("Pedilo de nuevo.")
     assert get_destination(conn, d.id).value == "fede.otro"
+
+
+def test_expired_action_gets_resolved_at(conn):
+    c, _ = _fede(conn)
+    a = create_action(conn, "delete_contact", {"contact_id": c.id}, now=T0)
+    later = T0 + timedelta(minutes=11)
+    assert confirm_action(conn, a.id, now=later).outcome == "vencida"
+    row = conn.execute("SELECT resolved_at FROM pending_actions WHERE id = ?", (a.id,)).fetchone()
+    assert datetime.fromisoformat(row["resolved_at"]) == later

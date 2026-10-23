@@ -20,7 +20,7 @@ class ValidationError(ValueError):
 
 
 def cbu_check_digits_ok(digits: str) -> bool:
-    if len(digits) != 22 or not digits.isdigit():
+    if len(digits) != 22 or not re.fullmatch(r"[0-9]+", digits):
         return False
     d = [int(c) for c in digits]
     w1 = [7, 1, 3, 9, 7, 1, 3]
@@ -39,7 +39,9 @@ def normalize_text(text: str) -> str:
 def detect_destination_type(value: str) -> DestinationType:
     if "@" in value:
         return "email_mp"
-    if _CBU_SEPARATORS_RE.sub("", value).isdigit():
+    if _ALIAS_RE.match(value.strip().lower()):
+        return "alias"
+    if re.fullmatch(r"[0-9]+", _CBU_SEPARATORS_RE.sub("", value)):
         return "cbu_cvu"
     return "alias"
 
@@ -67,7 +69,7 @@ def _validate_cbu_cvu(value: str) -> str:
         raise ValidationError(
             f"El CBU/CVU tiene que tener 22 dígitos y tiene {len(digits)}."
         )
-    if not digits.isdigit():
+    if not re.fullmatch(r"[0-9]+", digits):
         raise ValidationError("El CBU/CVU solo puede tener dígitos.")
     if not cbu_check_digits_ok(digits):
         raise ValidationError("El CBU/CVU no es válido, revisá que no tenga errores de tipeo.")

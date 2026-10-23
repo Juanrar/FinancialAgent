@@ -23,3 +23,7 @@ def test_prompt_has_style_and_contact_rules():
 def test_prompt_omits_title_and_bold_rules():
     p = build_system_prompt([])
     assert "Negrita" not in p and "Títulos en mayúscula" not in p
+
+
+def test_prompt_explains_forwarded_messages():
+    assert "[Mensaje reenviado]" in build_system_prompt([])
