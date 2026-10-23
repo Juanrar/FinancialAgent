@@ -13,6 +13,13 @@ def test_health_and_migrations(settings):
     assert settings.db_path.exists()
 
 
+def test_app_starts_without_agent_browser(settings, monkeypatch):
+    monkeypatch.setattr("financial_agent.app.find_binary", lambda configured: None)
+    app = create_app(settings, with_bot=False)
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 200
+
+
 def test_setup_logging_silences_httpx():
     setup_logging("INFO")
     assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING
