@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 from fakes import FakeWallet
+from telegram.error import NetworkError
 
 from financial_agent.bot.chat import on_pending_callback
 from financial_agent.bot.fiwind_session import MSG_SESSION_EXPIRED
@@ -164,3 +165,37 @@ def test_manual_keyboard():
         ("Ya la hice", "t:done:5"),
         ("No la hago", "t:skip:5"),
     ]
+
+
+async def test_first_edit_failure_still_runs_transfer(conn):
+    wallet = FakeWallet(recipient=HOLDER)
+    a = await _pending_transfer(conn, wallet)
+    query = _query(f"p:ok:{a.id}")
+    query.edit_message_text.side_effect = [NetworkError("x"), None]
+    ctx = _ctx(conn, wallet)
+    await on_pending_callback(_update(query), ctx)
+    assert [c[0] for c in wallet.calls].count("withdraw") == 1
+    assert get_action(conn, a.id).status == "enviada"
+    ctx.application.bot_data["session"].add_context_note.assert_called_once()
+
+
+async def test_second_edit_failure_still_sends_follow_ups(conn):
+    wallet = FakeWallet(recipient=HOLDER, outcome=Expired())
+    a = await _pending_transfer(conn, wallet)
+    query = _query(f"p:ok:{a.id}", chat_id=7)
+    query.edit_message_text.side_effect = [None, NetworkError("x")]
+    ctx = _ctx(conn, wallet)
+    await on_pending_callback(_update(query), ctx)
+    ctx.application.bot_data["session"].add_context_note.assert_called_once()
+    assert query.message.reply_text.await_args.args[0].startswith("Podés hacerla a mano")
+    assert ctx.bot.send_message.await_args.args == (7, MSG_SESSION_EXPIRED)
+
+
+async def test_failing_send_does_not_skip_others(conn):
+    wallet = FakeWallet(recipient=HOLDER, outcome=Expired())
+    a = await _pending_transfer(conn, wallet)
+    query = _query(f"p:ok:{a.id}", chat_id=7)
+    query.message.reply_text.side_effect = NetworkError("x")
+    ctx = _ctx(conn, wallet)
+    await on_pending_callback(_update(query), ctx)
+    assert ctx.bot.send_message.await_args.args == (7, MSG_SESSION_EXPIRED)
