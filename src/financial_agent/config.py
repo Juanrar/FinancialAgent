@@ -20,6 +20,10 @@ class Settings:
     session_idle_minutes: int
     timezone: str
     log_level: str
+    fiwind_profile_dir: Path
+    fiwind_headed: bool
+    agent_browser_bin: str | None
+    routine_hour: int
 
 
 def _required(environ: Mapping[str, str], name: str) -> str:
@@ -41,6 +45,26 @@ def _path(environ: Mapping[str, str], name: str, default: str) -> Path:
     return Path(environ.get(name, "").strip() or default).resolve()
 
 
+def _routine_hour(environ: Mapping[str, str]) -> int:
+    try:
+        hour = _int(environ, "ROUTINE_HOUR", "10")
+    except ConfigError:
+        hour = 0
+    if not 1 <= hour <= 23:
+        raise ConfigError("La variable ROUTINE_HOUR debe ser una hora entre 1 y 23")
+    return hour
+
+
+def _fiwind_profile_dir(environ: Mapping[str, str]) -> Path:
+    local_app_data = environ.get("LOCALAPPDATA", "").strip()
+    default = (
+        str(Path(local_app_data) / "FinancialAgent" / "browser" / "fiwind")
+        if local_app_data
+        else "data/browser/fiwind"
+    )
+    return _path(environ, "FIWIND_PROFILE_DIR", default)
+
+
 def load_settings(environ: Mapping[str, str] = os.environ) -> Settings:
     return Settings(
         telegram_bot_token=_required(environ, "TELEGRAM_BOT_TOKEN"),
@@ -53,4 +77,8 @@ def load_settings(environ: Mapping[str, str] = os.environ) -> Settings:
         session_idle_minutes=_int(environ, "SESSION_IDLE_MINUTES", "30"),
         timezone=environ.get("TZ", "").strip() or "America/Argentina/Buenos_Aires",
         log_level=environ.get("LOG_LEVEL", "").strip() or "INFO",
+        fiwind_profile_dir=_fiwind_profile_dir(environ),
+        fiwind_headed=environ.get("FIWIND_HEADED", "").strip().lower() in ("1", "true", "si"),
+        agent_browser_bin=environ.get("AGENT_BROWSER_BIN", "").strip() or None,
+        routine_hour=_routine_hour(environ),
     )
