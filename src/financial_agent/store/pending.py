@@ -134,7 +134,14 @@ def create_action(
     routine_id: int | None = None,
 ) -> PendingAction:
     now = now or utc_now()
+    if kind == "transfer" and not payload.get("agent_text"):
+        raise ValueError("Una transferencia necesita agent_text.")
     description = _describe(conn, kind, payload)
+    if kind == "update_verification":
+        dest = contacts.get_destination(conn, payload["destination_id"])
+        name = contacts.get_contact(conn, dest.contact_id).name
+        text = f"Actualizar los datos del destino de {name} ({DESTINATION_LABELS[dest.type]} {dest.value})"
+        payload = {**payload, "agent_text": text}
     expires_at = now + ttl
     with conn:
         cur = conn.execute(

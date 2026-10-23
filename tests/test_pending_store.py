@@ -201,6 +201,8 @@ def test_transfer_description(conn):
 def test_agent_text_hides_fiwind_data(conn):
     a, _ = _transfer(conn)
     assert agent_text(a) == "Transferencia de $2.000 a Fede, alias fede.mp"
+    for secret in ("Federico", "Brubank", CVU):
+        assert secret not in agent_text(a)
     c = create_contact(conn, "Ana")
     old = create_action(conn, "delete_contact", {"contact_id": c.id}, now=T0)
     assert agent_text(old) == old.description
@@ -293,3 +295,20 @@ def test_update_verification_action(conn):
                              f"Federico J. Pérez, Ualá, CVU {CVU}")
     assert confirm_action(conn, a.id, now=T0).outcome == "confirmada"
     assert get_destination(conn, d.id).holder == "Federico J. Pérez"
+
+
+def test_transfer_requires_agent_text(conn):
+    c, d = _verified(conn)
+    with pytest.raises(ValueError):
+        create_action(conn, "transfer", {"contact_id": c.id, "destination_id": d.id,
+                                         "amount_cents": 200000}, now=T0)
+
+
+def test_update_verification_agent_text_has_no_fiwind_data(conn):
+    c, d = _verified(conn)
+    a = create_action(conn, "update_verification", {"destination_id": d.id,
+        "holder": "Federico J. Pérez", "account": CVU, "bank": "Ualá"}, now=T0)
+    assert agent_text(a) == "Actualizar los datos del destino de Fede (alias fede.mp)"
+    for secret in ("Federico", "Ualá", CVU):
+        assert secret not in agent_text(a)
+    assert agent_text(get_action(conn, a.id)) == agent_text(a)
