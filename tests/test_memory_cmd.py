@@ -4,27 +4,31 @@ from unittest.mock import AsyncMock
 
 from financial_agent.bot.awaiting import Awaiting, get_awaiting, set_awaiting
 from financial_agent.bot.memory_cmd import (
+    PAGE_NOTES,
     format_notes,
     handle_awaiting,
     notes_keyboard,
     on_memory,
     on_memory_callback,
+    paginate_notes,
 )
 from financial_agent.store import memory
 from financial_agent.store.memory import Note
 
 TZ = "America/Argentina/Buenos_Aires"
+T0 = datetime(2026, 10, 20, 12, tzinfo=UTC)
 
 
 def test_format_notes():
     notes = [Note(id=5, text="cobro el día 5", updated_at=datetime(2026, 10, 20, 15, tzinfo=UTC))]
-    assert format_notes(notes, TZ) == "Memoria:\n1. cobro el día 5 (20/10/2026)"
-    assert format_notes([], TZ) == "No hay notas guardadas."
+    page = paginate_notes(notes)[0]
+    assert format_notes(page, TZ, 0, 1) == "Memoria:\n1. cobro el día 5 (20/10/2026)"
+    assert format_notes([], TZ, 0, 1) == "No hay notas guardadas."
 
 
 def test_format_notes_uses_local_date():
     notes = [Note(id=1, text="a", updated_at=datetime(2026, 10, 21, 1, tzinfo=UTC))]
-    assert format_notes(notes, TZ) == "Memoria:\n1. a (20/10/2026)"
+    assert format_notes(paginate_notes(notes)[0], TZ, 0, 1) == "Memoria:\n1. a (20/10/2026)"
 
 
 def test_notes_keyboard():
@@ -32,12 +36,55 @@ def test_notes_keyboard():
         Note(id=5, text="a", updated_at=datetime.now(UTC)),
         Note(id=9, text="b", updated_at=datetime.now(UTC)),
     ]
-    rows = notes_keyboard(notes).inline_keyboard
+    rows = notes_keyboard(paginate_notes(notes)[0], 0, 1).inline_keyboard
     assert [(b.text, b.callback_data) for b in rows[1]] == [
         ("Editar 2", "m:edit:9"),
         ("Borrar 2", "m:del:9"),
     ]
-    assert notes_keyboard([]) is None
+    assert notes_keyboard([], 0, 1) is None
+
+
+def _notes(n, size=200):
+    return [Note(i, "x" * size, T0) for i in range(1, n + 1)]
+
+
+def test_pages_fit_telegram_limit():
+    pages = paginate_notes(_notes(60))
+    assert [pos for page in pages for pos, _ in page] == list(range(1, 61))
+    for i, page in enumerate(pages):
+        assert len(page) <= PAGE_NOTES
+        assert len(format_notes(page, TZ, i, len(pages))) <= 4096
+
+
+def test_pages_split_by_chars():
+    pages = paginate_notes(_notes(30, 1000))
+    assert [pos for page in pages for pos, _ in page] == list(range(1, 31))
+    assert all(len(page) <= 3 for page in pages)
+    for i, page in enumerate(pages):
+        assert len(format_notes(page, TZ, i, len(pages))) <= 4096
+
+
+def test_long_note_is_cut_in_listing():
+    text = format_notes(paginate_notes(_notes(1, 5000))[0], TZ, 0, 1)
+    assert len(text) <= 4096 and "…" in text
+
+
+def test_header_shows_page_only_when_many():
+    pages = paginate_notes(_notes(25))
+    assert format_notes(pages[1], TZ, 1, len(pages)).startswith("Memoria (página 2 de 3):")
+    assert format_notes(paginate_notes(_notes(2))[0], TZ, 0, 1).startswith("Memoria:")
+
+
+def test_keyboard_navigation():
+    pages = paginate_notes(_notes(25))
+    first = notes_keyboard(pages[0], 0, 3).inline_keyboard[-1]
+    middle = notes_keyboard(pages[1], 1, 3).inline_keyboard[-1]
+    last = notes_keyboard(pages[2], 2, 3).inline_keyboard[-1]
+    assert [(b.text, b.callback_data) for b in first] == [("Siguiente", "m:page:1")]
+    assert [b.callback_data for b in middle] == ["m:page:0", "m:page:2"]
+    assert [(b.text, b.callback_data) for b in last] == [("Anterior", "m:page:1")]
+    single = notes_keyboard(paginate_notes(_notes(2))[0], 0, 1).inline_keyboard
+    assert all(b.callback_data.startswith(("m:edit", "m:del")) for row in single for b in row)
 
 
 def _context(conn, settings):
@@ -157,3 +204,59 @@ async def test_handle_awaiting_note_gone(conn, settings):
     await handle_awaiting(update, context, awaiting)
     update.effective_message.reply_text.assert_awaited_with("Esa nota ya no existe.")
     assert get_awaiting(context) is None
+
+
+def _add(conn, n):
+    return [memory.add_note(conn, f"nota {i}") for i in range(1, n + 1)]
+
+
+async def test_page_callback_edits_message(conn, settings):
+    _add(conn, 25)
+    update = _callback_update("m:page:1")
+    await on_memory_callback(update, _context(conn, settings))
+    call = update.callback_query.edit_message_text.await_args
+    assert "página 2 de 3" in call.args[0]
+    assert call.args[0].splitlines()[1].startswith("11. nota 11")
+
+
+async def test_page_callback_clamps_index(conn, settings):
+    _add(conn, 25)
+    update = _callback_update("m:page:9")
+    await on_memory_callback(update, _context(conn, settings))
+    assert "página 3 de 3" in update.callback_query.edit_message_text.await_args.args[0]
+
+
+async def test_delete_redraws_same_page(conn, settings):
+    notes = _add(conn, 25)
+    update = _callback_update(f"m:del:{notes[12].id}")
+    await on_memory_callback(update, _context(conn, settings))
+    text = update.callback_query.edit_message_text.await_args.args[0]
+    assert "página 2 de 3" in text
+
+
+async def test_delete_last_note_of_last_page_goes_back(conn, settings):
+    notes = _add(conn, 21)
+    update = _callback_update(f"m:del:{notes[20].id}")
+    await on_memory_callback(update, _context(conn, settings))
+    text = update.callback_query.edit_message_text.await_args.args[0]
+    assert "página 2 de 2" in text
+
+
+async def test_edit_shows_global_position(conn, settings):
+    notes = _add(conn, 25)
+    update = _callback_update(f"m:edit:{notes[14].id}")
+    await on_memory_callback(update, _context(conn, settings))
+    assert update.callback_query.message.reply_text.await_args.args[0] == (
+        "Mandame el texto nuevo para la nota 15."
+    )
+
+
+async def test_handle_awaiting_shows_page_with_note(conn, settings):
+    notes = _add(conn, 25)
+    context = _context(conn, settings)
+    awaiting = Awaiting("note_edit", notes[22].id)
+    set_awaiting(context, awaiting)
+    update = _message_update("nuevo")
+    await handle_awaiting(update, context, awaiting)
+    second = update.effective_message.reply_text.await_args_list[1]
+    assert "página 3 de 3" in second.args[0]
