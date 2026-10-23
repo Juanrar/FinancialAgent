@@ -6,14 +6,22 @@ from typing import Literal
 
 from financial_agent.store import contacts
 from financial_agent.store.db import NotFoundError, utc_now
-from financial_agent.validation import DESTINATION_LABELS, ValidationError
+from financial_agent.money import format_amount
+from financial_agent.validation import DESTINATION_LABELS, ValidationError, account_label
 
 PENDING_TTL = timedelta(minutes=10)
+ROUTINE_TTL = timedelta(hours=24)
+_RESTART_DETAIL = "la app se reinició durante el envío"
 
 ActionKind = Literal[
-    "delete_contact", "delete_destination", "update_destination_value", "set_primary"
+    "delete_contact",
+    "delete_destination",
+    "update_destination_value",
+    "set_primary",
+    "transfer",
+    "update_verification",
 ]
-Outcome = Literal["confirmada", "cancelada", "vencida", "ya_resuelta", "fallida"]
+Outcome = Literal["confirmada", "cancelada", "vencida", "ya_resuelta", "fallida", "en_curso"]
 
 _MSG_EXPIRED = "Esta acción venció."
 _MSG_RESOLVED = "Esta acción ya se resolvió."
@@ -25,6 +33,10 @@ class _Changed(Exception):
     """La descripción actual ya no coincide con la que se mostró."""
 
 
+class _Unverified(ValueError):
+    """El destino de una transferencia no está verificado."""
+
+
 @dataclass(frozen=True)
 class PendingAction:
     id: int
@@ -34,6 +46,8 @@ class PendingAction:
     status: str
     created_at: datetime
     expires_at: datetime
+    routine_id: int | None = None
+    detail: str | None = None
 
 
 @dataclass(frozen=True)
@@ -56,6 +70,8 @@ def _from_row(row: sqlite3.Row) -> PendingAction:
         row["status"],
         datetime.fromisoformat(row["created_at"]),
         datetime.fromisoformat(row["expires_at"]),
+        row["routine_id"],
+        row["detail"],
     )
 
 
@@ -64,6 +80,15 @@ def _get(conn: sqlite3.Connection, action_id: int) -> PendingAction:
     if row is None:
         raise NotFoundError(f"No hay una acción con id {action_id}.")
     return _from_row(row)
+
+
+def get_action(conn: sqlite3.Connection, action_id: int) -> PendingAction:
+    return _get(conn, action_id)
+
+
+def agent_text(action: PendingAction) -> str:
+    """Texto que puede ver Claude: nunca incluye datos leídos de Fiwind."""
+    return action.payload.get("agent_text", action.description)
 
 
 def _describe(conn: sqlite3.Connection, kind: str, payload: dict) -> str:
@@ -78,6 +103,19 @@ def _describe(conn: sqlite3.Connection, kind: str, payload: dict) -> str:
     dest = contacts.get_destination(conn, payload["destination_id"])
     name = contacts.get_contact(conn, dest.contact_id).name
     label = DESTINATION_LABELS[dest.type]
+    if kind == "transfer":
+        if not dest.verified:
+            raise _Unverified("El destino no está verificado.")
+        return (
+            f"Transferir {format_amount(payload['amount_cents'])} a {name}: "
+            f"{dest.holder}, {dest.bank}, {account_label(dest.account)} {dest.account}"
+        )
+    if kind == "update_verification":
+        return (
+            f"Actualizar el destino de {name} ({label} {dest.value}) a: "
+            f"{payload['holder']}, {payload['bank']}, "
+            f"{account_label(payload['account'])} {payload['account']}"
+        )
     if kind == "delete_destination":
         return f"Borrar el {label} {dest.value} de {name}"
     if kind == "update_destination_value":
@@ -88,18 +126,25 @@ def _describe(conn: sqlite3.Connection, kind: str, payload: dict) -> str:
 
 
 def create_action(
-    conn: sqlite3.Connection, kind: ActionKind, payload: dict, now: datetime | None = None
+    conn: sqlite3.Connection,
+    kind: ActionKind,
+    payload: dict,
+    now: datetime | None = None,
+    ttl: timedelta = PENDING_TTL,
+    routine_id: int | None = None,
 ) -> PendingAction:
     now = now or utc_now()
     description = _describe(conn, kind, payload)
-    expires_at = now + PENDING_TTL
+    expires_at = now + ttl
     with conn:
         cur = conn.execute(
             "INSERT INTO pending_actions (kind, payload, description, status, created_at,"
-            " expires_at) VALUES (?, ?, ?, 'pendiente', ?, ?)",
-            (kind, json.dumps(payload), description, _iso(now), _iso(expires_at)),
+            " expires_at, routine_id) VALUES (?, ?, ?, 'pendiente', ?, ?, ?)",
+            (kind, json.dumps(payload), description, _iso(now), _iso(expires_at), routine_id),
         )
-    return PendingAction(cur.lastrowid, kind, payload, description, "pendiente", now, expires_at)
+    return PendingAction(
+        cur.lastrowid, kind, payload, description, "pendiente", now, expires_at, routine_id
+    )
 
 
 def _execute(conn: sqlite3.Connection, action: PendingAction) -> None:
@@ -112,6 +157,10 @@ def _execute(conn: sqlite3.Connection, action: PendingAction) -> None:
         contacts._update_destination_value(conn, payload["destination_id"], payload["value"])
     elif action.kind == "set_primary":
         contacts._set_primary(conn, payload["destination_id"])
+    elif action.kind == "update_verification":
+        contacts._set_verification(
+            conn, payload["destination_id"], payload["holder"], payload["account"], payload["bank"]
+        )
     else:
         raise ValueError(f"Tipo de acción desconocido: {action.kind}")
 
@@ -133,6 +182,9 @@ def _not_applied(conn: sqlite3.Connection, action_id: int, now: datetime) -> Res
 def confirm_action(
     conn: sqlite3.Connection, action_id: int, now: datetime | None = None
 ) -> Resolution:
+    row = conn.execute("SELECT kind FROM pending_actions WHERE id = ?", (action_id,)).fetchone()
+    if row is not None and row["kind"] == "transfer":
+        raise ValueError("Las transferencias se confirman con claim_transfer")
     now = now or utc_now()
     stamp = _iso(now)
     with conn:
@@ -178,12 +230,99 @@ def cancel_action(
     return Resolution("cancelada", "Cancelado.", _get(conn, action_id))
 
 
-def expire_all_pending(conn: sqlite3.Connection, now: datetime | None = None) -> int:
+def claim_transfer(
+    conn: sqlite3.Connection, action_id: int, now: datetime | None = None
+) -> Resolution:
+    """Reclama una transferencia para enviarla. No ejecuta nada: el envío lo hace quien llama."""
+    now = now or utc_now()
+    stamp = _iso(now)
+    with conn:
+        cur = conn.execute(
+            "UPDATE pending_actions SET status = 'en_curso'"
+            " WHERE id = ? AND kind = 'transfer' AND status = 'pendiente' AND expires_at > ?",
+            (action_id, stamp),
+        )
+        if cur.rowcount == 0:
+            return _not_applied(conn, action_id, now)
+        action = _get(conn, action_id)
+        try:
+            if _describe(conn, action.kind, action.payload) != action.description:
+                raise _Changed
+        except (_Changed, _Unverified, NotFoundError) as error:
+            conn.execute(
+                "UPDATE pending_actions SET status = 'cancelada', resolved_at = ? WHERE id = ?",
+                (stamp, action_id),
+            )
+            message = _MSG_MISSING if isinstance(error, NotFoundError) else _MSG_CHANGED
+            return Resolution("fallida", message, _get(conn, action_id))
+    return Resolution("en_curso", "Enviando...", action)
+
+
+def finish_transfer(
+    conn: sqlite3.Connection,
+    action_id: int,
+    status: Literal["enviada", "no_salio", "sin_confirmar"],
+    detail: str | None = None,
+    now: datetime | None = None,
+) -> PendingAction:
     now = now or utc_now()
     with conn:
         cur = conn.execute(
-            "UPDATE pending_actions SET status = 'vencida', resolved_at = ?"
-            " WHERE status = 'pendiente'",
-            (_iso(now),),
+            "UPDATE pending_actions SET status = ?, detail = ?, resolved_at = ?"
+            " WHERE id = ? AND status = 'en_curso'",
+            (status, detail, _iso(now), action_id),
         )
-    return cur.rowcount
+    if cur.rowcount == 0:
+        raise ValueError("La transferencia no está en curso.")
+    return _get(conn, action_id)
+
+
+def mark_done_manually(
+    conn: sqlite3.Connection, action_id: int, now: datetime | None = None
+) -> bool:
+    now = now or utc_now()
+    with conn:
+        cur = conn.execute(
+            "UPDATE pending_actions SET status = 'hecha_a_mano', resolved_at = ?"
+            " WHERE id = ? AND status = 'no_salio'",
+            (_iso(now), action_id),
+        )
+    return cur.rowcount == 1
+
+
+def expire_overdue_routine_actions(
+    conn: sqlite3.Connection, now: datetime | None = None
+) -> list[PendingAction]:
+    now = now or utc_now()
+    stamp = _iso(now)
+    with conn:
+        rows = conn.execute(
+            "SELECT id FROM pending_actions WHERE status = 'pendiente'"
+            " AND routine_id IS NOT NULL AND expires_at <= ?",
+            (stamp,),
+        ).fetchall()
+        for row in rows:
+            conn.execute(
+                "UPDATE pending_actions SET status = 'vencida', resolved_at = ? WHERE id = ?",
+                (stamp, row["id"]),
+            )
+    return [_get(conn, row["id"]) for row in rows]
+
+
+def expire_all_pending(conn: sqlite3.Connection, now: datetime | None = None) -> int:
+    """Al arrancar: vence lo pendiente (salvo confirmaciones de rutina vigentes) y marca
+    como sin confirmar lo que quedó en curso."""
+    now = now or utc_now()
+    stamp = _iso(now)
+    with conn:
+        cur = conn.execute(
+            "UPDATE pending_actions SET status = 'vencida', resolved_at = ?"
+            " WHERE status = 'pendiente' AND (routine_id IS NULL OR expires_at <= ?)",
+            (stamp, stamp),
+        )
+        in_flight = conn.execute(
+            "UPDATE pending_actions SET status = 'sin_confirmar', detail = ?, resolved_at = ?"
+            " WHERE status = 'en_curso'",
+            (_RESTART_DETAIL, stamp),
+        )
+    return cur.rowcount + in_flight.rowcount

@@ -7,14 +7,22 @@ from financial_agent.store.contacts import (
     create_contact,
     get_contact,
     get_destination,
+    set_verification,
     update_destination_value,
 )
 from financial_agent.store.db import NotFoundError
 from financial_agent.store.pending import (
+    ROUTINE_TTL,
+    agent_text,
     cancel_action,
+    claim_transfer,
     confirm_action,
     create_action,
     expire_all_pending,
+    expire_overdue_routine_actions,
+    finish_transfer,
+    get_action,
+    mark_done_manually,
 )
 
 T0 = datetime(2026, 10, 20, 12, tzinfo=UTC)
@@ -166,3 +174,122 @@ def test_expired_action_gets_resolved_at(conn):
     assert confirm_action(conn, a.id, now=later).outcome == "vencida"
     row = conn.execute("SELECT resolved_at FROM pending_actions WHERE id = ?", (a.id,)).fetchone()
     assert datetime.fromisoformat(row["resolved_at"]) == later
+
+
+CVU = "0000168300000000123459"
+
+
+def _verified(conn):
+    c = create_contact(conn, "Fede")
+    d = add_destination(conn, c.id, "alias", "fede.mp")
+    set_verification(conn, d.id, "Federico Pérez", CVU, "Brubank")
+    return c, d
+
+
+def _transfer(conn, now=T0, **kw):
+    c, d = _verified(conn)
+    payload = {"contact_id": c.id, "destination_id": d.id, "amount_cents": 200000,
+               "agent_text": "Transferencia de $2.000 a Fede, alias fede.mp"}
+    return create_action(conn, "transfer", payload, now=now, **kw), d
+
+
+def test_transfer_description(conn):
+    a, _ = _transfer(conn)
+    assert a.description == f"Transferir $2.000 a Fede: Federico Pérez, Brubank, CVU {CVU}"
+
+
+def test_agent_text_hides_fiwind_data(conn):
+    a, _ = _transfer(conn)
+    assert agent_text(a) == "Transferencia de $2.000 a Fede, alias fede.mp"
+    c = create_contact(conn, "Ana")
+    old = create_action(conn, "delete_contact", {"contact_id": c.id}, now=T0)
+    assert agent_text(old) == old.description
+
+
+def test_claim_transfer_once(conn):
+    a, _ = _transfer(conn)
+    assert claim_transfer(conn, a.id, now=T0).outcome == "en_curso"
+    assert get_action(conn, a.id).status == "en_curso"
+    assert claim_transfer(conn, a.id, now=T0).outcome == "ya_resuelta"
+
+
+def test_claim_transfer_expired(conn):
+    a, _ = _transfer(conn)
+    assert claim_transfer(conn, a.id, now=T0 + timedelta(minutes=11)).outcome == "vencida"
+
+
+def test_claim_after_destination_changed(conn):
+    a, d = _transfer(conn)
+    update_destination_value(conn, d.id, "fede.nuevo")
+    r = claim_transfer(conn, a.id, now=T0)
+    assert r.outcome == "fallida" and get_action(conn, a.id).status == "cancelada"
+
+
+def test_confirm_action_rejects_transfer(conn):
+    a, _ = _transfer(conn)
+    with pytest.raises(ValueError):
+        confirm_action(conn, a.id, now=T0)
+
+
+def test_finish_transfer(conn):
+    a, _ = _transfer(conn)
+    with pytest.raises(ValueError):
+        finish_transfer(conn, a.id, "enviada", now=T0)
+    claim_transfer(conn, a.id, now=T0)
+    done = finish_transfer(conn, a.id, "no_salio", "buscar el destino", now=T0)
+    assert (done.status, done.detail) == ("no_salio", "buscar el destino")
+
+
+def test_mark_done_manually(conn):
+    a, _ = _transfer(conn)
+    claim_transfer(conn, a.id, now=T0)
+    finish_transfer(conn, a.id, "no_salio", now=T0)
+    assert mark_done_manually(conn, a.id, now=T0) is True
+    assert get_action(conn, a.id).status == "hecha_a_mano"
+    assert mark_done_manually(conn, a.id, now=T0) is False
+
+
+def _routine_id(conn, contact_id):
+    return conn.execute("INSERT INTO routines (contact_id, amount_cents, day, created_at)"
+                        " VALUES (?, 200000, 5, 'x')", (contact_id,)).lastrowid
+
+
+def test_expire_all_pending_keeps_live_routine_actions(conn):
+    adhoc, d = _transfer(conn)
+    rid = _routine_id(conn, d.contact_id)
+    payload = {**adhoc.payload}
+    live = create_action(conn, "transfer", payload, now=T0, ttl=ROUTINE_TTL, routine_id=rid)
+    old = create_action(conn, "transfer", payload, now=T0 - timedelta(days=2),
+                        ttl=ROUTINE_TTL, routine_id=rid)
+    expire_all_pending(conn, now=T0 + timedelta(hours=1))
+    assert [get_action(conn, x.id).status for x in (adhoc, live, old)] == [
+        "vencida", "pendiente", "vencida"]
+
+
+def test_expire_overdue_routine_actions(conn):
+    a, d = _transfer(conn)
+    rid = _routine_id(conn, d.contact_id)
+    r = create_action(conn, "transfer", a.payload, now=T0, ttl=ROUTINE_TTL, routine_id=rid)
+    assert expire_overdue_routine_actions(conn, now=T0 + timedelta(hours=23)) == []
+    expired = expire_overdue_routine_actions(conn, now=T0 + timedelta(hours=25))
+    assert [x.id for x in expired] == [r.id] and get_action(conn, r.id).status == "vencida"
+    assert get_action(conn, a.id).status == "pendiente"  # las pedidas por chat no se tocan
+    assert expire_overdue_routine_actions(conn, now=T0 + timedelta(hours=26)) == []
+
+
+def test_expire_all_pending_marks_in_flight_unconfirmed(conn):
+    a, _ = _transfer(conn)
+    claim_transfer(conn, a.id, now=T0)
+    expire_all_pending(conn, now=T0)
+    after = get_action(conn, a.id)
+    assert (after.status, after.detail) == ("sin_confirmar", "la app se reinició durante el envío")
+
+
+def test_update_verification_action(conn):
+    c, d = _verified(conn)
+    a = create_action(conn, "update_verification", {"destination_id": d.id,
+        "holder": "Federico J. Pérez", "account": CVU, "bank": "Ualá"}, now=T0)
+    assert a.description == (f"Actualizar el destino de Fede (alias fede.mp) a: "
+                             f"Federico J. Pérez, Ualá, CVU {CVU}")
+    assert confirm_action(conn, a.id, now=T0).outcome == "confirmada"
+    assert get_destination(conn, d.id).holder == "Federico J. Pérez"
