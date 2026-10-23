@@ -84,3 +84,7 @@ def _validate_alias(value: str) -> str:
             "letras sin tildes, números, puntos o guiones."
         )
     return alias
+
+
+def account_label(account: str) -> str:
+    return "CVU" if account.startswith("000") else "CBU"

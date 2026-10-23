@@ -2,6 +2,7 @@ import pytest
 
 from financial_agent.validation import (
     ValidationError,
+    account_label,
     cbu_check_digits_ok,
     detect_destination_type,
     normalize_text,
@@ -69,3 +70,8 @@ def test_cbu_rejects_unicode_digits():
 ])
 def test_detect_destination_type(value, expected):
     assert detect_destination_type(value) == expected
+
+
+def test_account_label():
+    assert account_label("0000168300000000123459") == "CVU"
+    assert account_label("2850590994000000123456") == "CBU"

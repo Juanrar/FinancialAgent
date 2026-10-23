@@ -13,6 +13,7 @@ from financial_agent.store.contacts import (
     replace_nicknames,
     search_contacts,
     set_primary,
+    set_verification,
     update_destination_value,
 )
 from financial_agent.store.db import NotFoundError
@@ -128,3 +129,26 @@ def test_missing_ids_raise_not_found(conn):
         set_primary(conn, 99)
     with pytest.raises(NotFoundError):
         delete_contact(conn, 99)
+
+
+def test_set_verification(conn):
+    c = create_contact(conn, "Fede")
+    d = add_destination(conn, c.id, "alias", "fede.mp")
+    assert not d.verified
+    v = set_verification(conn, d.id, "Federico Pérez", "0000168300000000123459", "Brubank")
+    assert (v.holder, v.account, v.bank, v.verified) == (
+        "Federico Pérez", "0000168300000000123459", "Brubank", True)
+    assert get_destination(conn, d.id) == v
+
+
+def test_update_value_clears_verification(conn):
+    c = create_contact(conn, "Fede")
+    d = add_destination(conn, c.id, "alias", "fede.mp")
+    set_verification(conn, d.id, "Federico Pérez", "0000168300000000123459", "Brubank")
+    update_destination_value(conn, d.id, "fede.nuevo")
+    after = get_destination(conn, d.id)
+    assert after.verified is False
+    assert (after.holder, after.account, after.bank) == (None, None, None)
+    assert conn.execute(
+        "SELECT verified_at FROM destinations WHERE id = ?", (d.id,)
+    ).fetchone()[0] is None

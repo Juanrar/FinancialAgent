@@ -1,5 +1,6 @@
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime
 
 from financial_agent.store.db import NotFoundError, utc_now
 from financial_agent.validation import ValidationError, normalize_text, validate_destination
@@ -12,6 +13,13 @@ class Destination:
     type: str
     value: str
     is_primary: bool
+    holder: str | None = None
+    account: str | None = None
+    bank: str | None = None
+
+    @property
+    def verified(self) -> bool:
+        return self.holder is not None
 
 
 @dataclass(frozen=True)
@@ -38,7 +46,14 @@ def _clean_nickname(nickname: str) -> str:
 
 def _dest_from_row(row: sqlite3.Row) -> Destination:
     return Destination(
-        row["id"], row["contact_id"], row["type"], row["value"], bool(row["is_primary"])
+        row["id"],
+        row["contact_id"],
+        row["type"],
+        row["value"],
+        bool(row["is_primary"]),
+        row["verified_holder"],
+        row["verified_account"],
+        row["verified_bank"],
     )
 
 
@@ -195,7 +210,11 @@ def _update_destination_value(
     value = validate_destination(dest.type, value)
     name = _contact_name(conn, dest.contact_id)
     try:
-        conn.execute("UPDATE destinations SET value = ? WHERE id = ?", (value, destination_id))
+        conn.execute(
+            "UPDATE destinations SET value = ?, verified_holder = NULL, verified_account = NULL,"
+            " verified_bank = NULL, verified_at = NULL WHERE id = ?",
+            (value, destination_id),
+        )
     except sqlite3.IntegrityError:
         raise ValidationError(f"Ese destino ya está guardado para {name}.") from None
     return get_destination(conn, destination_id)
@@ -206,6 +225,35 @@ def update_destination_value(
 ) -> Destination:
     with conn:
         return _update_destination_value(conn, destination_id, value)
+
+
+def _set_verification(
+    conn: sqlite3.Connection,
+    destination_id: int,
+    holder: str,
+    account: str,
+    bank: str,
+    now: datetime | None = None,
+) -> Destination:
+    get_destination(conn, destination_id)
+    conn.execute(
+        "UPDATE destinations SET verified_holder = ?, verified_account = ?, verified_bank = ?,"
+        " verified_at = ? WHERE id = ?",
+        (holder, account, bank, (now or utc_now()).isoformat(), destination_id),
+    )
+    return get_destination(conn, destination_id)
+
+
+def set_verification(
+    conn: sqlite3.Connection,
+    destination_id: int,
+    holder: str,
+    account: str,
+    bank: str,
+    now: datetime | None = None,
+) -> Destination:
+    with conn:
+        return _set_verification(conn, destination_id, holder, account, bank, now)
 
 
 def _set_primary(conn: sqlite3.Connection, destination_id: int) -> Destination:
