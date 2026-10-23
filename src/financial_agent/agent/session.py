@@ -25,7 +25,9 @@ from claude_agent_sdk.types import (
 from financial_agent.agent.instructions import build_system_prompt
 from financial_agent.agent.tools import ALLOWED_TOOLS, SERVER_NAME, TurnState, build_server
 from financial_agent.config import Settings
+from financial_agent.fiwind.client import FiwindClient
 from financial_agent.store.memory import list_notes
+from financial_agent.store.routines import describe_routine, list_routines
 from financial_agent.store.pending import PendingAction
 
 logger = logging.getLogger(__name__)
@@ -57,6 +59,7 @@ class AgentError(Exception):
 class AgentReply:
     text: str
     pending: list[PendingAction]
+    session_expired: bool = False
 
 
 def build_options(
@@ -109,9 +112,11 @@ class AgentSession:
         conn: sqlite3.Connection,
         client_factory: Callable[[ClaudeAgentOptions], ClaudeSDKClient] = ClaudeSDKClient,
         idle_seconds: float | None = None,
+        wallet: FiwindClient | None = None,
     ):
         self._settings = settings
         self._conn = conn
+        self._wallet = FiwindClient(None) if wallet is None else wallet
         self._client_factory = client_factory
         self._idle_seconds = (
             settings.session_idle_minutes * 60 if idle_seconds is None else idle_seconds
@@ -168,7 +173,9 @@ class AgentSession:
         reply = await self._receive(client)
         parts = [reply, *self.turn.notices]
         return AgentReply(
-            text="\n".join(part for part in parts if part), pending=list(self.turn.pending)
+            text="\n".join(part for part in parts if part),
+            pending=list(self.turn.pending),
+            session_expired=self.turn.session_expired,
         )
 
     async def _open(self) -> ClaudeSDKClient:
@@ -177,8 +184,18 @@ class AgentSession:
         # Hasta ese chequeo, allowed_tools y permission_mode="dontAsk"
         # impiden que corra una herramienta ajena.
         notes = list_notes(self._conn)
-        server = build_server(self._conn, self.turn)
-        options = build_options(self._settings, build_system_prompt(notes), server)
+        routine_lines = [
+            f"[id={r.id}] {describe_routine(self._conn, r)}" for r in list_routines(self._conn)
+        ]
+        server = build_server(
+            self._conn,
+            self.turn,
+            self._wallet,
+            routine_hour=self._settings.routine_hour,
+            timezone=self._settings.timezone,
+        )
+        prompt = build_system_prompt(notes, routine_lines)
+        options = build_options(self._settings, prompt, server)
         client = self._client_factory(options)
         self._client = client
         await client.connect()

@@ -16,7 +16,7 @@ def test_prompt_without_notes():
 
 def test_prompt_has_style_and_contact_rules():
     p = build_system_prompt([])
-    for phrase in ["voseo", "Ve al grano", "pregunt", "botones", "transferir"]:
+    for phrase in ["voseo", "Ve al grano", "pregunt", "botones", "pedir_transferencia"]:
         assert phrase in p
 
 
@@ -27,3 +27,10 @@ def test_prompt_omits_title_and_bold_rules():
 
 def test_prompt_explains_forwarded_messages():
     assert "[Mensaje reenviado]" in build_system_prompt([])
+
+
+def test_prompt_lists_routines_and_transfers():
+    prompt = build_system_prompt([], ["[id=1] $30.000 a Tío Pepe los días 5"])
+    assert "[id=1] $30.000 a Tío Pepe los días 5" in prompt and "pedir_transferencia" in prompt
+    assert "Rutinas:\nNo hay rutinas." in build_system_prompt([])
+    assert "todavía no podés" not in prompt

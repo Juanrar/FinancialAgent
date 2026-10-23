@@ -5,13 +5,20 @@ from financial_agent.agent.tools import (
     build_server,
     build_tools,
 )
+from fakes import FakeWallet
+
+from financial_agent.fiwind.client import FiwindUnavailable, SessionExpired
+from financial_agent.fiwind.pages import Recipient
 from financial_agent.store.contacts import add_destination, create_contact, get_contact
 from financial_agent.store.memory import list_notes
 
+_RECIPIENT = Recipient("Federico Pérez", "Brubank", "0000168300000000123459")
 
-def _tools(conn):
+
+def _tools(conn, wallet=None):
     turn = TurnState(notices=[], pending=[])
-    return {t.name: t for t in build_tools(conn, turn)}, turn
+    wallet = wallet or FakeWallet(recipient=_RECIPIENT)
+    return {t.name: t for t in build_tools(conn, turn, wallet)}, turn
 
 
 def _text(result):
@@ -19,7 +26,7 @@ def _text(result):
 
 
 def test_allowed_tools():
-    assert len(TOOL_NAMES) == 15
+    assert len(TOOL_NAMES) == 20
     assert all(n.startswith("mcp__fa__") for n in ALLOWED_TOOLS)
 
 
@@ -29,7 +36,7 @@ def test_tool_names_match_built_tools(conn):
 
 
 def test_build_server(conn):
-    server = build_server(conn, TurnState(notices=[], pending=[]))
+    server = build_server(conn, TurnState(notices=[], pending=[]), FakeWallet())
     assert server["name"] == "fa"
 
 
@@ -58,7 +65,10 @@ async def test_agregar_destino_first_is_primary(conn):
     await tools["agregar_destino"].handler(
         {"contacto_id": c.id, "tipo": "alias", "valor": "fede.mp"}
     )
-    assert turn.notices == ["(agregué a Fede el alias fede.mp, quedó como principal)"]
+    assert turn.notices == [
+        "(agregué a Fede el alias fede.mp, quedó como principal, "
+        "verificado en Fiwind: Federico Pérez, Brubank)"
+    ]
 
 
 async def test_agregar_destino_second_not_primary(conn):
@@ -68,7 +78,9 @@ async def test_agregar_destino_second_not_primary(conn):
     await tools["agregar_destino"].handler(
         {"contacto_id": c.id, "tipo": "alias", "valor": "fede.otro"}
     )
-    assert turn.notices == ["(agregué a Fede el alias fede.otro)"]
+    assert turn.notices == [
+        "(agregué a Fede el alias fede.otro, verificado en Fiwind: Federico Pérez, Brubank)"
+    ]
 
 
 async def test_invalid_destination_returns_error_without_notice(conn):
@@ -156,3 +168,142 @@ async def test_listar_contactos_empty_and_turn_reset(conn):
     await tools["crear_contacto"].handler({"nombre": "Fede"})
     turn.reset()
     assert turn.notices == [] and turn.pending == []
+
+
+async def test_pedir_transferencia(conn):
+    tools, turn = _tools(conn)
+    c = create_contact(conn, "Fede")
+    add_destination(conn, c.id, "alias", "fede.mp")
+    result = await tools["pedir_transferencia"].handler({"contacto_id": c.id, "monto": "2000"})
+    assert "Transferencia de $2.000 a Fede, alias fede.mp" in _text(result)
+    assert "Federico" not in _text(result)
+    assert "Federico Pérez" in turn.pending[0].description
+
+
+async def test_pedir_transferencia_bad_amount(conn):
+    tools, turn = _tools(conn)
+    c = create_contact(conn, "Fede")
+    add_destination(conn, c.id, "alias", "fede.mp")
+    result = await tools["pedir_transferencia"].handler({"contacto_id": c.id, "monto": "dos mil"})
+    assert result["is_error"] is True and "monto" in _text(result)
+    assert turn.pending == []
+
+
+async def test_pedir_transferencia_session_expired(conn):
+    tools, turn = _tools(conn, FakeWallet(lookup_error=SessionExpired("buscar")))
+    c = create_contact(conn, "Fede")
+    add_destination(conn, c.id, "alias", "fede.mp")
+    result = await tools["pedir_transferencia"].handler({"contacto_id": c.id, "monto": "2000"})
+    assert result["is_error"] is True and "venció" in _text(result)
+    assert turn.session_expired is True
+    assert turn.pending == []
+
+
+async def test_pedir_transferencia_fiwind_unavailable(conn):
+    tools, turn = _tools(conn, FakeWallet(lookup_error=FiwindUnavailable("buscar", "timeout")))
+    c = create_contact(conn, "Fede")
+    add_destination(conn, c.id, "alias", "fede.mp")
+    result = await tools["pedir_transferencia"].handler({"contacto_id": c.id, "monto": "2000"})
+    assert result["is_error"] is True and "paso buscar" in _text(result)
+    assert turn.session_expired is False
+
+
+async def test_agregar_destino_verifies(conn):
+    tools, turn = _tools(conn)
+    c = create_contact(conn, "Fede")
+    result = await tools["agregar_destino"].handler(
+        {"contacto_id": c.id, "tipo": "alias", "valor": "fede.mp"}
+    )
+    assert turn.notices == [
+        "(agregué a Fede el alias fede.mp, quedó como principal, "
+        "verificado en Fiwind: Federico Pérez, Brubank)"
+    ]
+    assert "Federico" not in _text(result) and "Verificado en Fiwind" in _text(result)
+    assert "(verificado)" in _text(result)
+
+
+async def test_agregar_destino_email_skips_fiwind(conn):
+    wallet = FakeWallet()
+    tools, turn = _tools(conn, wallet)
+    c = create_contact(conn, "Fede")
+    await tools["agregar_destino"].handler(
+        {"contacto_id": c.id, "tipo": "email_mp", "valor": "fede@mail.com"}
+    )
+    assert wallet.calls == []
+    assert len(turn.notices) == 1
+    assert turn.notices[0].endswith("fede@mail.com, quedó como principal)")
+
+
+async def test_agregar_destino_unverified_keeps_destination(conn):
+    tools, turn = _tools(conn, FakeWallet(lookup_error=SessionExpired("buscar")))
+    c = create_contact(conn, "Fede")
+    result = await tools["agregar_destino"].handler(
+        {"contacto_id": c.id, "tipo": "alias", "valor": "fede.mp"}
+    )
+    assert turn.notices[0].endswith("sin verificar: la sesión de Fiwind venció)")
+    assert "Sin verificar: la sesión de Fiwind venció" in _text(result)
+    assert turn.session_expired is True
+    assert len(get_contact(conn, c.id).destinations) == 1
+
+
+async def test_agregar_destino_not_found_in_fiwind(conn):
+    tools, turn = _tools(conn, FakeWallet(recipient=None))
+    c = create_contact(conn, "Fede")
+    await tools["agregar_destino"].handler(
+        {"contacto_id": c.id, "tipo": "alias", "valor": "fede.mp"}
+    )
+    assert turn.notices[0].endswith("sin verificar: Fiwind no encontró ese destino)")
+    assert turn.session_expired is False
+
+
+async def test_agregar_destino_without_browser(conn):
+    tools, turn = _tools(conn, FakeWallet(available=False))
+    c = create_contact(conn, "Fede")
+    await tools["agregar_destino"].handler(
+        {"contacto_id": c.id, "tipo": "alias", "valor": "fede.mp"}
+    )
+    assert turn.notices[0].endswith("sin verificar: agent-browser no está instalado en la PC)")
+
+
+async def test_routine_tools(conn):
+    tools, turn = _tools(conn)
+    c = create_contact(conn, "Tío Pepe")
+    add_destination(conn, c.id, "alias", "tio.pepe")
+    r = await tools["crear_rutina"].handler({"contacto_id": c.id, "monto": "30000", "dia": 5})
+    rid = int(_text(r).split("id=")[1].rstrip("."))
+    await tools["editar_rutina"].handler({"rutina_id": rid, "monto": "35000"})
+    listed = await tools["listar_rutinas"].handler({})
+    await tools["borrar_rutina"].handler({"rutina_id": rid})
+    assert turn.notices == [
+        "(creé la rutina: $30.000 a Tío Pepe los días 5)",
+        "(cambié la rutina: $35.000 a Tío Pepe los días 5)",
+        "(borré la rutina: $35.000 a Tío Pepe los días 5)",
+    ]
+    assert f"id={rid} $35.000 a Tío Pepe los días 5" in _text(listed)
+
+
+async def test_listar_rutinas_empty(conn):
+    tools, _ = _tools(conn)
+    assert _text(await tools["listar_rutinas"].handler({})) == "No hay rutinas."
+
+
+async def test_editar_rutina_day_only(conn):
+    tools, turn = _tools(conn)
+    c = create_contact(conn, "Tío Pepe")
+    r = await tools["crear_rutina"].handler({"contacto_id": c.id, "monto": "100", "dia": 5})
+    rid = int(_text(r).split("id=")[1].rstrip("."))
+    await tools["editar_rutina"].handler({"rutina_id": rid, "dia": 10})
+    assert turn.notices[-1] == "(cambié la rutina: $100 a Tío Pepe los días 10)"
+
+
+async def test_crear_rutina_bad_amount(conn):
+    tools, turn = _tools(conn)
+    c = create_contact(conn, "Tío Pepe")
+    r = await tools["crear_rutina"].handler({"contacto_id": c.id, "monto": "mucho", "dia": 5})
+    assert r["is_error"] is True and turn.notices == []
+
+
+def test_turn_reset_clears_session_expired():
+    turn = TurnState(session_expired=True)
+    turn.reset()
+    assert turn.session_expired is False
