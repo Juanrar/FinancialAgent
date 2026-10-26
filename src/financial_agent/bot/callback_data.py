@@ -1,3 +1,8 @@
+import contextlib
+
+from telegram.error import TelegramError
+
+
 def make_callback(prefix: str, action: str, item_id: int | None = None) -> str:
     parts = [prefix, action] if item_id is None else [prefix, action, str(item_id)]
     return ":".join(parts)
@@ -10,3 +15,13 @@ def parse_callback(data: str) -> tuple[str, str, int | None]:
     if len(parts) == 3:
         return parts[0], parts[1], int(parts[2])
     raise ValueError("callback_data inválido")
+
+
+async def safe_answer(query, text: str | None = None) -> None:
+    """Responder el callback es cosmético: si Telegram lo rechaza (por ejemplo, por tardío),
+    el resto del flujo sigue."""
+    with contextlib.suppress(TelegramError):
+        if text is None:
+            await query.answer()
+        else:
+            await query.answer(text)

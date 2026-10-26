@@ -1,7 +1,7 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from financial_agent.bot.callback_data import make_callback, parse_callback
+from financial_agent.bot.callback_data import make_callback, parse_callback, safe_answer
 from financial_agent.fiwind.client import FiwindUnavailable
 
 PREFIX = "f"
@@ -33,7 +33,7 @@ async def send_session_expired(bot, chat_id: int) -> None:
 
 async def on_fiwind_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    await query.answer()
+    await safe_answer(query)
     _, action, _ = parse_callback(query.data)
     wallet = context.application.bot_data["wallet"]
     if action == "open":

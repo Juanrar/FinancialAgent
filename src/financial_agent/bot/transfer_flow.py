@@ -4,9 +4,15 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
-from financial_agent.bot.callback_data import make_callback, parse_callback
+from financial_agent.bot.callback_data import make_callback, parse_callback, safe_answer
 from financial_agent.bot.fiwind_session import send_session_expired
-from financial_agent.store.pending import agent_text, claim_transfer, get_action, mark_done_manually
+from financial_agent.store.pending import (
+    agent_text,
+    claim_transfer,
+    finish_transfer,
+    get_action,
+    mark_done_manually,
+)
 from financial_agent.transfers import manual_instructions, run_transfer
 
 logger = logging.getLogger(__name__)
@@ -15,6 +21,11 @@ PREFIX = "t"
 MSG_DONE_MANUALLY = "Registrada como hecha a mano."
 MSG_SKIPPED = "No se hizo."
 MSG_ALREADY_RESOLVED = "Esa transferencia ya se resolvió."
+MSG_BUSY = "Esa transferencia ya se está procesando o ya se resolvió."
+MSG_INTERNAL_ERROR = (
+    "No sé si salió: hubo un error interno después de tocar Confirmar. "
+    "Revisá los movimientos de Fiwind antes de pedirla de nuevo."
+)
 
 
 async def _guarded(step: str, call) -> None:
@@ -36,6 +47,14 @@ def manual_keyboard(action_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def _mark_internal_error(conn, action_id: int) -> None:
+    try:
+        if get_action(conn, action_id).status == "en_curso":
+            finish_transfer(conn, action_id, "sin_confirmar", "error interno")
+    except Exception as error:
+        logger.error("no se pudo marcar la transferencia %s: %s", action_id, type(error).__name__)
+
+
 async def confirm_transfer(query, context: ContextTypes.DEFAULT_TYPE, action_id: int) -> None:
     # Import tardío: chat importa este módulo para despachar la confirmación.
     from financial_agent.bot.chat import pending_keyboard
@@ -44,14 +63,33 @@ async def confirm_transfer(query, context: ContextTypes.DEFAULT_TYPE, action_id:
     conn = bot_data["conn"]
     resolution = claim_transfer(conn, action_id)
     description = resolution.action.description
+    if resolution.outcome == "ya_resuelta":
+        # El mensaje ya muestra el resultado: no se pisa.
+        await safe_answer(query, MSG_BUSY)
+        return
+    await safe_answer(query)
     if resolution.outcome != "en_curso":
-        await query.edit_message_text(f"{description}\n\n{resolution.message}")
+        await _guarded(
+            "edit_claim", query.edit_message_text(f"{description}\n\n{resolution.message}")
+        )
         return
 
     await _guarded(
         "edit_enviando", query.edit_message_text(f"{description}\n\n{resolution.message}")
     )
-    report = await run_transfer(conn, bot_data["wallet"], resolution.action)
+    try:
+        report = await run_transfer(conn, bot_data["wallet"], resolution.action)
+    except Exception as error:
+        logger.error("falló la transferencia %s: %s", action_id, type(error).__name__)
+        _mark_internal_error(conn, action_id)
+        bot_data["session"].add_context_note(
+            f"Resultado de la transferencia ({agent_text(resolution.action)}): "
+            "sin confirmar, error interno"
+        )
+        await _guarded(
+            "edit_error", query.edit_message_text(f"{description}\n\n{MSG_INTERNAL_ERROR}")
+        )
+        return
     # Primero el aviso al agente: si falla la edición del mensaje, igual se enteró del resultado.
     bot_data["session"].add_context_note(report.agent_note)
     await _guarded(
@@ -79,7 +117,7 @@ async def confirm_transfer(query, context: ContextTypes.DEFAULT_TYPE, action_id:
 
 async def on_manual_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    await query.answer()
+    await safe_answer(query)
     _, choice, action_id = parse_callback(query.data)
     bot_data = context.application.bot_data
     conn = bot_data["conn"]

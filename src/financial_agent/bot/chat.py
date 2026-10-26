@@ -7,9 +7,10 @@ from telegram.ext import ContextTypes
 
 from financial_agent.agent.session import AgentError
 from financial_agent.bot.awaiting import get_awaiting
-from financial_agent.bot.callback_data import make_callback, parse_callback
+from financial_agent.bot.callback_data import make_callback, parse_callback, safe_answer
 from financial_agent.bot.fiwind_session import send_session_expired
 from financial_agent.bot.transfer_flow import confirm_transfer
+from financial_agent.store.db import NotFoundError
 from financial_agent.store.pending import agent_text, cancel_action, confirm_action, get_action
 
 PREFIX = "p"
@@ -92,14 +93,22 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await send_session_expired(context.bot, update.effective_chat.id)
 
 
+def _is_transfer(conn, action_id: int) -> bool:
+    try:
+        return get_action(conn, action_id).kind == "transfer"
+    except NotFoundError:
+        return False
+
+
 async def on_pending_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    await query.answer()
     _, choice, action_id = parse_callback(query.data)
     conn = context.application.bot_data["conn"]
-    if choice == "ok" and get_action(conn, action_id).kind == "transfer":
+    if choice == "ok" and _is_transfer(conn, action_id):
+        # confirm_transfer responde el callback: un segundo toque lleva un aviso propio.
         await confirm_transfer(query, context, action_id)
         return
+    await safe_answer(query)
     resolve = confirm_action if choice == "ok" else cancel_action
     resolution = resolve(conn, action_id)
     description = resolution.action.description
