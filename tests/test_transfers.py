@@ -4,7 +4,7 @@ import pytest
 from fakes import FakeWallet
 
 from financial_agent.fiwind.client import (
-    STEP_AMOUNT, STEP_SEND, Expired, Insufficient, Mismatch, NotSent, Unconfirmed,
+    STEP_AMOUNT, STEP_SEND, Expired, Insufficient, Mismatch, NotSent, Sent, Unconfirmed,
     WithdrawalOrder,
 )
 from financial_agent.fiwind.pages import Recipient
@@ -117,7 +117,24 @@ async def test_run_sent(conn):
     assert get_action(conn, a.id).status == "enviada"
     assert report.text == "Listo. Fiwind aceptó la transferencia. Estado: En proceso."
     assert "enviada" in report.agent_note and FEDE_HOLDER not in report.agent_note
-    assert wallet.calls[-1] == ("withdraw", WithdrawalOrder(FEDE_CVU, FEDE_HOLDER, FEDE_CVU, 200000))
+    assert wallet.calls[-1] == ("withdraw", WithdrawalOrder("fede.mp", FEDE_HOLDER, FEDE_CVU, 200000))
+
+
+async def test_run_other_status_is_unconfirmed(conn):
+    wallet = FakeWallet(recipient=FEDE, outcome=Sent("Rechazado"))
+    a = await _claimed(conn, wallet)
+    report = await run_transfer(conn, wallet, a)
+    after = get_action(conn, a.id)
+    assert (after.status, after.detail) == ("sin_confirmar", "otro estado")
+    assert report.text == (
+        "No sé si salió: Fiwind mostró el estado Rechazado. "
+        "Revisá los movimientos de Fiwind antes de pedirla de nuevo."
+    )
+    assert report.agent_note == (
+        "Resultado de la transferencia (Transferencia de $2.000 a Fede, alias fede.mp): "
+        "sin confirmar, Fiwind mostró otro estado"
+    )
+    assert "Rechazado" not in report.agent_note
 
 
 async def test_run_not_sent_offers_manual(conn):

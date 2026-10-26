@@ -19,6 +19,7 @@ from financial_agent.store.pending import PendingAction
 from financial_agent.validation import DESTINATION_LABELS, ValidationError, account_label
 
 TRANSFERABLE_TYPES = ("cbu_cvu", "alias")
+SENT_STATUS = "En proceso"
 
 _NO_BROWSER = "No puedo verificar el destino porque agent-browser no está instalado en la PC."
 _NOT_FOUND = "Fiwind no encontró ese destino. Revisá el valor."
@@ -139,9 +140,16 @@ async def run_transfer(
     conn: sqlite3.Connection, wallet: FiwindClient, action: PendingAction
 ) -> TransferReport:
     dest = contacts.get_destination(conn, action.payload["destination_id"])
-    order = WithdrawalOrder(dest.account, dest.holder, dest.account, action.payload["amount_cents"])
+    order = WithdrawalOrder(dest.value, dest.holder, dest.account, action.payload["amount_cents"])
     outcome = await wallet.withdraw(order)
 
+    if isinstance(outcome, Sent) and outcome.status != SENT_STATUS:
+        pending.finish_transfer(conn, action.id, "sin_confirmar", "otro estado")
+        return TransferReport(
+            f"No sé si salió: Fiwind mostró el estado {outcome.status}. "
+            "Revisá los movimientos de Fiwind antes de pedirla de nuevo.",
+            _note(action, "sin confirmar, Fiwind mostró otro estado"),
+        )
     if isinstance(outcome, Sent):
         pending.finish_transfer(conn, action.id, "enviada")
         return TransferReport(
