@@ -3,6 +3,7 @@
 Uso:
     uv run python scripts/spike_fiwind.py login
     uv run python scripts/spike_fiwind.py sesion
+    uv run python scripts/spike_fiwind.py buscar DESTINO [--oculto]
     uv run python scripts/spike_fiwind.py retiro DESTINO "Titular" MONTO [--oculto]
 
 login abre una ventana visible para iniciar sesión a mano. El perfil queda en
@@ -98,6 +99,33 @@ def cmd_sesion(args) -> None:
         print(f"Sesión activa. URL: {url}")
 
 
+def open_withdrawal_form(headed: bool) -> None:
+    # Si el daemon ya corre, ignora --profile y --headed: hay que cerrarlo antes.
+    browser("close", check=False)
+    browser("open", WITHDRAWAL_URL, headed=headed)
+    browser("wait", "--load", "networkidle")
+    if "/auth/" in browser("get", "url"):
+        browser("close", check=False)
+        sys.exit("La sesión venció. Corré: uv run python scripts/spike_fiwind.py login")
+    # Abriendo la URL directo, Fiwind no elige moneda y no muestra el campo del destino.
+    browser("find", "role", "combobox", "click", "--name", "Seleccioná una moneda")
+    browser("find", "role", "option", "click", "--name", "ARS", "--exact")
+
+
+def cmd_buscar(args) -> None:
+    open_withdrawal_form(headed=not args.oculto)
+    browser("wait", DESTINATION_INPUT)
+    browser("fill", DESTINATION_INPUT, args.destino)
+    browser("find", "role", "button", "click", "--name", "Buscar")
+    # Espera fija para ver también lo que muestra Fiwind si no encuentra el destino.
+    browser("wait", "5000")
+    print("=== get text form ===")
+    print(repr(browser("get", "text", "form", check=False)))
+    print("=== snapshot -c ===")
+    print(browser("snapshot", "-c", check=False))
+    browser("close")
+
+
 def cmd_retiro(args) -> None:
     try:
         amount = Decimal(args.monto.replace(",", "."))
@@ -107,17 +135,7 @@ def cmd_retiro(args) -> None:
         sys.exit("El monto tiene que ser positivo y con 2 decimales como máximo.")
     is_account_number = re.fullmatch(r"[0-9]{22}", args.destino) is not None
 
-    # Si el daemon ya corre, ignora --profile y --headed: hay que cerrarlo antes.
-    browser("close", check=False)
-    browser("open", WITHDRAWAL_URL, headed=not args.oculto)
-    browser("wait", "--load", "networkidle")
-    if "/auth/" in browser("get", "url"):
-        browser("close", check=False)
-        sys.exit("La sesión venció. Corré: uv run python scripts/spike_fiwind.py login")
-
-    # Abriendo la URL directo, Fiwind no elige moneda y no muestra el campo del destino.
-    browser("find", "role", "combobox", "click", "--name", "Seleccioná una moneda")
-    browser("find", "role", "option", "click", "--name", "ARS", "--exact")
+    open_withdrawal_form(headed=not args.oculto)
     # Los campos aparecen después de elegir moneda o destino, y find no espera.
     browser("wait", DESTINATION_INPUT)
     browser("fill", DESTINATION_INPUT, args.destino)
@@ -153,6 +171,11 @@ def main() -> None:
     sub = parser.add_subparsers(required=True)
     sub.add_parser("login", help="Iniciar sesión a mano").set_defaults(func=cmd_login)
     sub.add_parser("sesion", help="Ver si la sesión sigue abierta").set_defaults(func=cmd_sesion)
+
+    buscar = sub.add_parser("buscar", help="Busca un destino sin cargar monto. No mueve plata")
+    buscar.add_argument("destino", help="CBU, CVU o alias")
+    buscar.add_argument("--oculto", action="store_true", help="Sin ventana visible")
+    buscar.set_defaults(func=cmd_buscar)
 
     retiro = sub.add_parser("retiro", help="Retiro real a un CBU, CVU o alias")
     retiro.add_argument("destino", help="CBU, CVU o alias")
