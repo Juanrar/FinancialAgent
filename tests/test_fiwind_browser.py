@@ -83,7 +83,14 @@ def test_close_never_raises(monkeypatch):
     _browser(monkeypatch, FakeRun(raises=subprocess.TimeoutExpired("ab", 60))).close()
 
 
-def test_find_binary(monkeypatch):
-    assert find_binary("C:/npm/agent-browser.CMD") == "C:/npm/agent-browser.CMD"
+def test_find_binary(monkeypatch, tmp_path):
+    exe = tmp_path / "agent-browser.CMD"
+    exe.write_text("")
+    assert find_binary(str(exe)) == str(exe)
     monkeypatch.setattr(shutil, "which", lambda name: f"/bin/{name}")
     assert find_binary(None) == "/bin/agent-browser"
+
+
+def test_find_binary_configured_but_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(shutil, "which", lambda name: f"/bin/{name}")
+    assert find_binary(str(tmp_path / "no-existe.CMD")) is None

@@ -78,7 +78,7 @@ def load_settings(environ: Mapping[str, str] = os.environ) -> Settings:
         timezone=environ.get("TZ", "").strip() or "America/Argentina/Buenos_Aires",
         log_level=environ.get("LOG_LEVEL", "").strip() or "INFO",
         fiwind_profile_dir=_fiwind_profile_dir(environ),
-        fiwind_headed=environ.get("FIWIND_HEADED", "").strip().lower() in ("1", "true", "si"),
+        fiwind_headed=environ.get("FIWIND_HEADED", "").strip().lower() in ("1", "true", "si", "sí"),
         agent_browser_bin=environ.get("AGENT_BROWSER_BIN", "").strip() or None,
         routine_hour=_routine_hour(environ),
     )

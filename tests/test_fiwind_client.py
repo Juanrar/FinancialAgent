@@ -92,6 +92,18 @@ async def test_withdraw_dialog_amount_mismatch():
     assert SEND not in browser.calls
 
 
+@pytest.mark.parametrize("old,new", [
+    (HOLDER, "Otra Persona"),
+    (f"CVU\n{CVU}", "CVU\n0000999900000000000011"),
+])
+async def test_withdraw_dialog_holder_or_account_mismatch(old, new):
+    assert old in CONFIRM_DIALOG
+    client, browser = _client({("get", "text", DIALOG): [CONFIRM_DIALOG.replace(old, new)]})
+    outcome = await client.withdraw(ORDER)
+    assert isinstance(outcome, NotSent) and outcome.step == STEP_CONFIRM
+    assert SEND not in browser.calls
+
+
 async def test_withdraw_dialog_unreadable():
     client, browser = _client({("get", "text", DIALOG): ["algo raro"]})
     outcome = await client.withdraw(ORDER)

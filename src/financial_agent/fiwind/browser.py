@@ -23,7 +23,10 @@ class BrowserTimeout(BrowserCommandError):
 
 
 def find_binary(configured: str | None) -> str | None:
-    return configured or shutil.which("agent-browser")
+    if configured:
+        # Una ruta configurada que no existe se trata como "no instalado".
+        return configured if Path(configured).is_file() else None
+    return shutil.which("agent-browser")
 
 
 class AgentBrowser:

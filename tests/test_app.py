@@ -27,6 +27,15 @@ def test_app_starts_without_agent_browser(settings, monkeypatch):
         assert client.get("/health").status_code == 200
 
 
+def test_app_warns_when_configured_binary_is_missing(settings, tmp_path, capsys):
+    from dataclasses import replace
+
+    missing = replace(settings, agent_browser_bin=str(tmp_path / "no-existe.CMD"))
+    with TestClient(create_app(missing, with_bot=False)) as client:
+        assert client.get("/health").status_code == 200
+    assert "agent-browser no está instalado" in capsys.readouterr().out
+
+
 def test_setup_logging_silences_httpx():
     setup_logging("INFO")
     assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING
