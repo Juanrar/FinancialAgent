@@ -1,6 +1,13 @@
 import logging
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from fastapi.testclient import TestClient
+from telegram.error import NetworkError
+
+from financial_agent.store.contacts import add_destination, create_contact, set_verification
+from financial_agent.store.db import connect, migrate
+from financial_agent.store.pending import claim_transfer, create_action, get_action
 
 from financial_agent.app import create_app
 from financial_agent.logs import setup_logging
@@ -49,3 +56,79 @@ def test_setup_logging_debug_keeps_libraries_quiet():
         assert logging.getLogger("claude_agent_sdk").getEffectiveLevel() == logging.CRITICAL
     finally:
         setup_logging("INFO")
+
+
+CVU = "0000168300000000123459"
+RESTART_TEXT = (
+    "La transferencia quedó sin confirmar porque la app se reinició mientras se enviaba: "
+    "Transferir $2.000 a Fede: Federico Pérez, Brubank, CVU {cvu}. "
+    "Revisá los movimientos de Fiwind antes de pedirla de nuevo."
+)
+
+
+def _seed_in_flight(settings):
+    conn = connect(settings.db_path)
+    migrate(conn)
+    c = create_contact(conn, "Fede")
+    d = add_destination(conn, c.id, "alias", "fede.mp")
+    set_verification(conn, d.id, "Federico Pérez", CVU, "Brubank")
+    payload = {"destination_id": d.id, "amount_cents": 200000,
+               "agent_text": "Transferencia de $2.000 a Fede, alias fede.mp"}
+    action = create_action(conn, "transfer", payload)
+    claim_transfer(conn, action.id)
+    conn.close()
+    return action.id
+
+
+def _patch_bot(monkeypatch, send):
+    sessions = []
+    real_session = __import__("financial_agent.app", fromlist=["AgentSession"]).AgentSession
+
+    def make_session(*args, **kwargs):
+        sessions.append(real_session(*args, **kwargs))
+        return sessions[-1]
+
+    monkeypatch.setattr("financial_agent.app.find_binary", lambda configured: None)
+    monkeypatch.setattr("financial_agent.app.AgentSession", make_session)
+    monkeypatch.setattr(
+        "financial_agent.app.build_application",
+        lambda *a, **k: SimpleNamespace(bot=SimpleNamespace(send_message=send)),
+    )
+    monkeypatch.setattr("financial_agent.app.start_bot", AsyncMock())
+    monkeypatch.setattr("financial_agent.app.stop_bot", AsyncMock())
+    return sessions
+
+
+def test_restart_with_transfer_in_flight_notifies_juan(settings, monkeypatch):
+    action_id = _seed_in_flight(settings)
+    send = AsyncMock()
+    sessions = _patch_bot(monkeypatch, send)
+    with TestClient(create_app(settings)):
+        pass
+    send.assert_any_await(1, RESTART_TEXT.format(cvu=CVU))
+    assert (
+        "Resultado de la transferencia (Transferencia de $2.000 a Fede, alias fede.mp): "
+        "sin confirmar, la app se reinició durante el envío"
+    ) in sessions[0]._context_notes
+    conn = connect(settings.db_path)
+    assert get_action(conn, action_id).status == "sin_confirmar"
+    conn.close()
+
+
+def test_restart_notice_failure_does_not_stop_startup(settings, monkeypatch):
+    _seed_in_flight(settings)
+    send = AsyncMock(side_effect=NetworkError("sin red"))
+    sessions = _patch_bot(monkeypatch, send)
+    with TestClient(create_app(settings)) as client:
+        assert client.get("/health").status_code == 200
+    assert len(sessions[0]._context_notes) == 1
+
+
+def test_restart_without_bot_still_marks_unconfirmed(settings, monkeypatch):
+    action_id = _seed_in_flight(settings)
+    monkeypatch.setattr("financial_agent.app.find_binary", lambda configured: None)
+    with TestClient(create_app(settings, with_bot=False)):
+        pass
+    conn = connect(settings.db_path)
+    assert get_action(conn, action_id).status == "sin_confirmar"
+    conn.close()

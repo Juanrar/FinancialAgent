@@ -23,6 +23,7 @@ from financial_agent.store.pending import (
     finish_transfer,
     get_action,
     mark_done_manually,
+    mark_in_flight_unconfirmed,
 )
 
 T0 = datetime(2026, 10, 20, 12, tzinfo=UTC)
@@ -264,8 +265,9 @@ def test_expire_all_pending_keeps_live_routine_actions(conn):
     old = create_action(conn, "transfer", payload, now=T0 - timedelta(days=2),
                         ttl=ROUTINE_TTL, routine_id=rid)
     expire_all_pending(conn, now=T0 + timedelta(hours=1))
+    # Las de rutina (vencidas o no) las vence el scheduler, que además avisa.
     assert [get_action(conn, x.id).status for x in (adhoc, live, old)] == [
-        "vencida", "pendiente", "vencida"]
+        "vencida", "pendiente", "pendiente"]
 
 
 def test_expire_overdue_routine_actions(conn):
@@ -282,9 +284,22 @@ def test_expire_overdue_routine_actions(conn):
 def test_expire_all_pending_marks_in_flight_unconfirmed(conn):
     a, _ = _transfer(conn)
     claim_transfer(conn, a.id, now=T0)
-    expire_all_pending(conn, now=T0)
+    moved = mark_in_flight_unconfirmed(conn, now=T0)
     after = get_action(conn, a.id)
     assert (after.status, after.detail) == ("sin_confirmar", "la app se reinició durante el envío")
+    assert [x.id for x in moved] == [a.id] and moved[0].status == "sin_confirmar"
+    assert mark_in_flight_unconfirmed(conn, now=T0) == []
+
+
+def test_confirm_action_failure_writes_resolved_at(conn):
+    c, d = _fede(conn)
+    a = create_action(conn, "delete_destination", {"destination_id": d.id}, now=T0)
+    conn.execute("DELETE FROM destinations WHERE id = ?", (d.id,))
+    conn.commit()
+    assert confirm_action(conn, a.id, now=T0).outcome == "fallida"
+    row = conn.execute("SELECT status, resolved_at FROM pending_actions WHERE id = ?",
+                       (a.id,)).fetchone()
+    assert row["status"] == "cancelada" and row["resolved_at"] is not None
 
 
 def test_update_verification_action(conn):

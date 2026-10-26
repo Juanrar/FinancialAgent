@@ -2,6 +2,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from telegram.error import TelegramError
 
 from financial_agent.agent.session import AgentSession
 from financial_agent.bot.application import build_application, start_bot, stop_bot
@@ -11,7 +12,7 @@ from financial_agent.fiwind.client import FiwindClient
 from financial_agent.logs import setup_logging
 from financial_agent.scheduler import Scheduler
 from financial_agent.store.db import connect, migrate
-from financial_agent.store.pending import expire_all_pending
+from financial_agent.store.pending import agent_text, expire_all_pending, mark_in_flight_unconfirmed
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ def create_app(settings: Settings | None = None, with_bot: bool = True) -> FastA
         try:
             migrate(conn)
             expire_all_pending(conn)
+            interrupted = mark_in_flight_unconfirmed(conn)
             binary = find_binary(active.agent_browser_bin)
             browser = None
             if binary:
@@ -37,6 +39,11 @@ def create_app(settings: Settings | None = None, with_bot: bool = True) -> FastA
                 )
             wallet = FiwindClient(browser)
             session = AgentSession(active, conn, wallet=wallet)
+            for action in interrupted:
+                session.add_context_note(
+                    f"Resultado de la transferencia ({agent_text(action)}): "
+                    "sin confirmar, la app se reinició durante el envío"
+                )
             bot = None
             scheduler = None
             try:
@@ -44,6 +51,19 @@ def create_app(settings: Settings | None = None, with_bot: bool = True) -> FastA
                     bot = build_application(active, conn, session, wallet)
                     await start_bot(bot)
                     logger.info("bot iniciado")
+                    for action in interrupted:
+                        try:
+                            await bot.bot.send_message(
+                                active.telegram_owner_id,
+                                "La transferencia quedó sin confirmar porque la app se reinició "
+                                f"mientras se enviaba: {action.description}. Revisá los "
+                                "movimientos de Fiwind antes de pedirla de nuevo.",
+                            )
+                        except TelegramError as error:
+                            logger.error(
+                                "no se pudo avisar la transferencia sin confirmar: %s",
+                                type(error).__name__,
+                            )
                     scheduler = Scheduler(active, conn, wallet, bot.bot)
                     scheduler.start()
                 yield

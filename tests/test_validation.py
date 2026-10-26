@@ -42,12 +42,6 @@ def test_unknown_type():
     with pytest.raises(ValidationError):
         validate_destination("cvu", VALID_CVU)
 
-def test_detect_destination_type():
-    assert detect_destination_type("a@b.com") == "email_mp"
-    assert detect_destination_type("00000031 0000000000 0017") == "cbu_cvu"
-    assert detect_destination_type("123") == "cbu_cvu"
-    assert detect_destination_type("fede.mp") == "alias"
-
 def test_normalize_text():
     assert normalize_text("  Martín   PÉREZ ") == "martin perez"
 
@@ -67,6 +61,9 @@ def test_cbu_rejects_unicode_digits():
     ("000016830000000012345", "cbu_cvu"),  # 21 dígitos: CBU mal tipeado
     ("fede@mail.com", "email_mp"),
     ("fede.mp", "alias"),
+    ("a@b.com", "email_mp"),
+    ("00000031 0000000000 0017", "cbu_cvu"),
+    ("123", "cbu_cvu"),
 ])
 def test_detect_destination_type(value, expected):
     assert detect_destination_type(value) == expected

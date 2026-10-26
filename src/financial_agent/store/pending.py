@@ -209,7 +209,8 @@ def confirm_action(
             _execute(conn, action)
         except (_Changed, NotFoundError, ValidationError) as error:
             conn.execute(
-                "UPDATE pending_actions SET status = 'cancelada' WHERE id = ?", (action_id,)
+                "UPDATE pending_actions SET status = 'cancelada', resolved_at = ? WHERE id = ?",
+                (stamp, action_id),
             )
             if isinstance(error, NotFoundError):
                 message = _MSG_MISSING
@@ -317,19 +318,29 @@ def expire_overdue_routine_actions(
 
 
 def expire_all_pending(conn: sqlite3.Connection, now: datetime | None = None) -> int:
-    """Al arrancar: vence lo pendiente (salvo confirmaciones de rutina vigentes) y marca
-    como sin confirmar lo que quedó en curso."""
+    """Al arrancar: vence lo pendiente pedido por chat. Las confirmaciones de rutina
+    (vencidas o no) quedan para el scheduler, que las vence y avisa."""
     now = now or utc_now()
-    stamp = _iso(now)
     with conn:
         cur = conn.execute(
             "UPDATE pending_actions SET status = 'vencida', resolved_at = ?"
-            " WHERE status = 'pendiente' AND (routine_id IS NULL OR expires_at <= ?)",
-            (stamp, stamp),
+            " WHERE status = 'pendiente' AND routine_id IS NULL",
+            (_iso(now),),
         )
-        in_flight = conn.execute(
-            "UPDATE pending_actions SET status = 'sin_confirmar', detail = ?, resolved_at = ?"
-            " WHERE status = 'en_curso'",
-            (_RESTART_DETAIL, stamp),
-        )
-    return cur.rowcount + in_flight.rowcount
+    return cur.rowcount
+
+
+def mark_in_flight_unconfirmed(
+    conn: sqlite3.Connection, now: datetime | None = None
+) -> list[PendingAction]:
+    """Al arrancar: lo que quedó en curso pasa a sin confirmar y se devuelve para avisar."""
+    now = now or utc_now()
+    with conn:
+        rows = conn.execute("SELECT id FROM pending_actions WHERE status = 'en_curso'").fetchall()
+        for row in rows:
+            conn.execute(
+                "UPDATE pending_actions SET status = 'sin_confirmar', detail = ?, resolved_at = ?"
+                " WHERE id = ?",
+                (_RESTART_DETAIL, _iso(now), row["id"]),
+            )
+    return [_get(conn, row["id"]) for row in rows]
