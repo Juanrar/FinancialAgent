@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -21,6 +21,7 @@ from financial_agent.store.routines import (
     list_routines,
     mark_sent,
     monthly_total,
+    next_run_date,
     update_routine,
 )
 from financial_agent.validation import ValidationError
@@ -204,3 +205,26 @@ def test_cascades(conn):
     assert get_routine(conn, r.id).destination_id is None
     delete_contact(conn, c.id)
     assert list_routines(conn) == []
+
+
+def _r(conn, day, now):
+    c = create_contact(conn, "Tío Pepe")
+    return create_routine(conn, c.id, 100000, day, hour=10, tz=TZ, now=now)
+
+
+def test_next_run_date(conn):
+    base = datetime(2026, 10, 20, 12, tzinfo=ZoneInfo(TZ))
+    pending_day = _r(conn, 25, base)
+    assert next_run_date(pending_day, base, hour=10, tz=TZ) == date(2026, 10, 25)
+    passed = _r(conn, 5, base)  # nace enviada: la próxima es el mes siguiente
+    assert next_run_date(passed, base, hour=10, tz=TZ) == date(2026, 11, 5)
+    early = _r(conn, 20, datetime(2026, 10, 20, 9, tzinfo=ZoneInfo(TZ)))
+    assert next_run_date(early, datetime(2026, 10, 20, 9, tzinfo=ZoneInfo(TZ)),
+                         hour=10, tz=TZ) == date(2026, 10, 20)
+
+
+def test_next_run_date_year_end_and_short_month(conn):
+    dec = datetime(2026, 12, 20, 12, tzinfo=ZoneInfo(TZ))
+    assert next_run_date(_r(conn, 5, dec), dec, hour=10, tz=TZ) == date(2027, 1, 5)
+    oct_ = datetime(2026, 10, 31, 12, tzinfo=ZoneInfo(TZ))
+    assert next_run_date(_r(conn, 31, oct_), oct_, hour=10, tz=TZ) == date(2026, 11, 30)

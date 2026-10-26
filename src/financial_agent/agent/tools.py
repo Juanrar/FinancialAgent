@@ -1,6 +1,7 @@
 import sqlite3
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from claude_agent_sdk import McpSdkServerConfig, SdkMcpTool, create_sdk_mcp_server, tool
 
@@ -8,9 +9,14 @@ from financial_agent.fiwind.client import FiwindClient, FiwindUnavailable, Sessi
 from financial_agent.money import parse_amount
 from financial_agent.store import contacts, memory, pending, routines
 from financial_agent.store.contacts import Contact
-from financial_agent.store.db import NotFoundError
+from financial_agent.store.db import NotFoundError, utc_now
 from financial_agent.store.pending import PendingAction
-from financial_agent.transfers import TRANSFERABLE_TYPES, prepare_transfer, verify_destination
+from financial_agent.transfers import (
+    TRANSFERABLE_TYPES,
+    choose_destination,
+    prepare_transfer,
+    verify_destination,
+)
 from financial_agent.validation import DESTINATION_LABELS, ValidationError, validate_destination
 
 SERVER_NAME = "fa"
@@ -122,9 +128,15 @@ def build_tools(
     *,
     routine_hour: int = 10,
     timezone: str = "America/Argentina/Buenos_Aires",
+    clock: Callable[[], datetime] = utc_now,
 ) -> list[SdkMcpTool]:
     def _guard(fn):
         return _safe(turn, fn)
+
+    def routine_notice(verb: str, routine) -> str:
+        next_date = routines.next_run_date(routine, clock(), hour=routine_hour, tz=timezone)
+        text = routines.describe_routine(conn, routine)
+        return f"({verb} la rutina: {text}, la próxima es el {next_date:%d/%m})"
 
     def request(kind: str, payload: dict) -> dict:
         action = pending.create_action(conn, kind, payload)
@@ -338,6 +350,9 @@ def build_tools(
     )
     @_guard
     async def crear_rutina(args):
+        if args.get("destino_id") is None:
+            # Falla ahora y no recién el día de la rutina.
+            choose_destination(contacts.get_contact(conn, args["contacto_id"]), None)
         routine = routines.create_routine(
             conn,
             args["contacto_id"],
@@ -346,8 +361,9 @@ def build_tools(
             hour=routine_hour,
             tz=timezone,
             destination_id=args.get("destino_id"),
+            now=clock(),
         )
-        turn.notices.append(f"(creé la rutina: {routines.describe_routine(conn, routine)})")
+        turn.notices.append(routine_notice("creé", routine))
         return _ok(f"Rutina creada con id={routine.id}.")
 
     @tool(
@@ -372,8 +388,9 @@ def build_tools(
             tz=timezone,
             amount_cents=amount,
             day=args.get("dia"),
+            now=clock(),
         )
-        turn.notices.append(f"(cambié la rutina: {routines.describe_routine(conn, routine)})")
+        turn.notices.append(routine_notice("cambié", routine))
         return _ok(f"Rutina {routine.id} actualizada.")
 
     @tool("borrar_rutina", "Borra una rutina.", {"rutina_id": int})

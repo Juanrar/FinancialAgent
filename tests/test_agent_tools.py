@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from financial_agent.agent.tools import (
     ALLOWED_TOOLS,
     TOOL_NAMES,
@@ -10,15 +12,19 @@ from fakes import FakeWallet
 from financial_agent.fiwind.client import FiwindUnavailable, SessionExpired
 from financial_agent.fiwind.pages import Recipient
 from financial_agent.store.contacts import add_destination, create_contact, get_contact
+from financial_agent.store import routines
 from financial_agent.store.memory import list_notes
 
 _RECIPIENT = Recipient("Federico Pérez", "Brubank", "0000168300000000123459")
 
 
+NOW = datetime(2026, 10, 23, 15, tzinfo=UTC)  # 12:00 en Buenos Aires
+
+
 def _tools(conn, wallet=None):
     turn = TurnState(notices=[], pending=[])
     wallet = wallet or FakeWallet(recipient=_RECIPIENT)
-    return {t.name: t for t in build_tools(conn, turn, wallet)}, turn
+    return {t.name: t for t in build_tools(conn, turn, wallet, clock=lambda: NOW)}, turn
 
 
 def _text(result):
@@ -275,8 +281,8 @@ async def test_routine_tools(conn):
     listed = await tools["listar_rutinas"].handler({})
     await tools["borrar_rutina"].handler({"rutina_id": rid})
     assert turn.notices == [
-        "(creé la rutina: $30.000 a Tío Pepe los días 5)",
-        "(cambié la rutina: $35.000 a Tío Pepe los días 5)",
+        "(creé la rutina: $30.000 a Tío Pepe los días 5, la próxima es el 05/11)",
+        "(cambié la rutina: $35.000 a Tío Pepe los días 5, la próxima es el 05/11)",
         "(borré la rutina: $35.000 a Tío Pepe los días 5)",
     ]
     assert f"id={rid} $35.000 a Tío Pepe los días 5" in _text(listed)
@@ -290,15 +296,45 @@ async def test_listar_rutinas_empty(conn):
 async def test_editar_rutina_day_only(conn):
     tools, turn = _tools(conn)
     c = create_contact(conn, "Tío Pepe")
+    add_destination(conn, c.id, "alias", "tio.pepe")
     r = await tools["crear_rutina"].handler({"contacto_id": c.id, "monto": "100", "dia": 5})
     rid = int(_text(r).split("id=")[1].rstrip("."))
-    await tools["editar_rutina"].handler({"rutina_id": rid, "dia": 10})
-    assert turn.notices[-1] == "(cambié la rutina: $100 a Tío Pepe los días 10)"
+    await tools["editar_rutina"].handler({"rutina_id": rid, "dia": 28})
+    # El 5 de octubre ya pasó y se marcó como enviada: el 28 recién toca en noviembre.
+    assert turn.notices[-1] == (
+        "(cambié la rutina: $100 a Tío Pepe los días 28, la próxima es el 28/11)"
+    )
+
+
+async def test_editar_rutina_to_a_passed_day_shows_next_month(conn):
+    tools, turn = _tools(conn)
+    c = create_contact(conn, "Tío Pepe")
+    add_destination(conn, c.id, "alias", "tio.pepe")
+    r = await tools["crear_rutina"].handler({"contacto_id": c.id, "monto": "100", "dia": 28})
+    rid = int(_text(r).split("id=")[1].rstrip("."))
+    assert turn.notices[-1].endswith("los días 28, la próxima es el 28/10)")
+    await tools["editar_rutina"].handler({"rutina_id": rid, "dia": 15})
+    assert turn.notices[-1].endswith("los días 15, la próxima es el 15/11)")
+
+
+async def test_crear_rutina_without_transferable_destination(conn):
+    tools, turn = _tools(conn)
+    c = create_contact(conn, "Tío Pepe")
+    r = await tools["crear_rutina"].handler({"contacto_id": c.id, "monto": "100", "dia": 5})
+    assert r["is_error"] is True and "no tiene destinos" in _text(r)
+    assert turn.notices == []
+    assert routines.list_routines(conn) == []
+
+    email = create_contact(conn, "Ana")
+    add_destination(conn, email.id, "email_mp", "ana@mail.com")
+    r = await tools["crear_rutina"].handler({"contacto_id": email.id, "monto": "100", "dia": 5})
+    assert r["is_error"] is True and "no transfiere a emails" in _text(r)
 
 
 async def test_crear_rutina_bad_amount(conn):
     tools, turn = _tools(conn)
     c = create_contact(conn, "Tío Pepe")
+    add_destination(conn, c.id, "alias", "tio.pepe")
     r = await tools["crear_rutina"].handler({"contacto_id": c.id, "monto": "mucho", "dia": 5})
     assert r["is_error"] is True and turn.notices == []
 

@@ -1,7 +1,7 @@
 import calendar
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from financial_agent.money import format_amount
@@ -54,6 +54,20 @@ def _moment_passed(day: int, local_now: datetime, hour: int) -> bool:
         microsecond=0,
     )
     return local_now >= moment
+
+
+def next_run_date(routine: Routine, now: datetime, *, hour: int, tz: str) -> date:
+    """Fecha local de la próxima vez que toca la rutina."""
+    local_now = _local(now, tz)
+    if routine.last_sent_month != month_key(local_now) and not _moment_passed(
+        routine.day, local_now, hour
+    ):
+        year, month = local_now.year, local_now.month
+    elif local_now.month == 12:
+        year, month = local_now.year + 1, 1
+    else:
+        year, month = local_now.year, local_now.month + 1
+    return date(year, month, effective_day(routine.day, year, month))
 
 
 def _initial_last_sent(day: int, now: datetime, hour: int, tz: str) -> str | None:
