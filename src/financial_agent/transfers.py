@@ -24,6 +24,15 @@ _NO_BROWSER = "No puedo verificar el destino porque agent-browser no está insta
 _NOT_FOUND = "Fiwind no encontró ese destino. Revisá el valor."
 
 
+class DestinationError(ValidationError):
+    """No se pudo elegir destino. `for_juan` es el motivo escrito para Juan; el mensaje
+    normal está escrito para Claude."""
+
+    def __init__(self, message: str, for_juan: str):
+        super().__init__(message)
+        self.for_juan = for_juan
+
+
 @dataclass(frozen=True)
 class TransferReport:
     text: str
@@ -33,10 +42,11 @@ class TransferReport:
     session_expired: bool = False
 
 
-def _no_emails(contact: Contact) -> str:
-    return (
+def _no_emails(contact: Contact) -> DestinationError:
+    return DestinationError(
         "Fiwind no transfiere a emails de Mercado Pago. "
-        f"Pedile a Juan un CBU, CVU o alias de {contact.name}."
+        f"Pedile a Juan un CBU, CVU o alias de {contact.name}.",
+        "Fiwind no transfiere a emails de Mercado Pago",
     )
 
 
@@ -45,25 +55,27 @@ def choose_destination(contact: Contact, destination_id: int | None) -> Destinat
         for dest in contact.destinations:
             if dest.id == destination_id:
                 if dest.type not in TRANSFERABLE_TYPES:
-                    raise ValidationError(_no_emails(contact))
+                    raise _no_emails(contact)
                 return dest
         raise ValidationError(f"Ese destino no es de {contact.name}.")
     if not contact.destinations:
-        raise ValidationError(
-            f"{contact.name} no tiene destinos. Pedile a Juan un CBU, CVU o alias."
+        raise DestinationError(
+            f"{contact.name} no tiene destinos. Pedile a Juan un CBU, CVU o alias.",
+            f"{contact.name} no tiene CBU, CVU ni alias",
         )
     options = [d for d in contact.destinations if d.type in TRANSFERABLE_TYPES]
     if not options:
-        raise ValidationError(_no_emails(contact))
+        raise _no_emails(contact)
     for dest in options:
         if dest.is_primary:
             return dest
     if len(options) == 1:
         return options[0]
     listing = "; ".join(f"id={d.id} {DESTINATION_LABELS[d.type]} {d.value}" for d in options)
-    raise ValidationError(
+    raise DestinationError(
         f"{contact.name} tiene varios destinos y ninguno es principal. "
-        f"Preguntale a Juan cuál usar: {listing}"
+        f"Preguntale a Juan cuál usar: {listing}",
+        f"{contact.name} tiene varios destinos y ninguno es principal",
     )
 
 

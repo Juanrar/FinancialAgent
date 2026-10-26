@@ -39,7 +39,8 @@ def _reason(error: Exception, expired: str = _REASON_EXPIRED) -> str:
     if isinstance(error, FiwindUnavailable):
         return f"falló el paso {error.step}"
     if isinstance(error, ValidationError):
-        return str(error)
+        # Los motivos escritos para Claude se traducen; el resto no termina en punto.
+        return getattr(error, "for_juan", None) or str(error).rstrip(".")
     return "algo falló"
 
 
@@ -125,31 +126,42 @@ class Scheduler:
         month = month_key(local)
         due = due_routines(self.conn, now, hour=self.settings.routine_hour, tz=self.settings.timezone)
         for routine in due:
-            mark_sent(self.conn, routine.id, month)
+            # Un error al hablar con Telegram en una rutina no frena las demás.
             try:
-                action = await prepare_transfer(
-                    self.conn,
-                    self.wallet,
-                    routine.contact_id,
-                    routine.amount_cents,
-                    routine.destination_id,
-                    routine_id=routine.id,
-                    now=now,
-                )
+                await self._run_routine(routine, month, now)
             except Exception as error:
-                logger.warning(
-                    "no se pudo preparar la rutina %s: %s", routine.id, type(error).__name__
+                logger.error(
+                    "falló el envío de la rutina %s: %s", routine.id, type(error).__name__
                 )
+
+    async def _run_routine(self, routine, month: str, now: datetime) -> None:
+        mark_sent(self.conn, routine.id, month)
+        try:
+            action = await prepare_transfer(
+                self.conn,
+                self.wallet,
+                routine.contact_id,
+                routine.amount_cents,
+                routine.destination_id,
+                routine_id=routine.id,
+                now=now,
+            )
+        except Exception as error:
+            logger.warning(
+                "no se pudo preparar la rutina %s: %s", routine.id, type(error).__name__
+            )
+            try:
                 await self._send(
                     f"No pude preparar la rutina ({describe_routine(self.conn, routine)}): "
                     f"{_reason(error, _PREPARE_EXPIRED)}. Pedímela cuando quieras."
                 )
+            finally:
                 if isinstance(error, SessionExpired):
                     await send_session_expired(self.bot, self.settings.telegram_owner_id)
-                continue
-            await self._send(
-                f"Rutina del mes: {action.description}", reply_markup=pending_keyboard(action.id)
-            )
+            return
+        await self._send(
+            f"Rutina del mes: {action.description}", reply_markup=pending_keyboard(action.id)
+        )
 
     async def _announce_expired(self, now: datetime, local: datetime) -> None:
         for action in expire_overdue_routine_actions(self.conn, now):

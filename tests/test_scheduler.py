@@ -201,3 +201,68 @@ async def test_loop_survives_errors(settings, conn):
     await asyncio.sleep(0.05)
     await s.stop()
     assert calls >= 2
+
+
+async def test_overdue_routine_action_after_restart_is_announced_once(settings, conn):
+    from financial_agent.store.pending import expire_all_pending
+
+    _routine(conn, day=5, created=local(2026, 10, 1, 12))
+    s, bot = _scheduler(settings, conn, _wallet())
+    await s.tick(local(2026, 11, 5, 10))
+    markup = _routine_messages(bot)[0].kwargs["reply_markup"]
+    action_id = int(markup.inline_keyboard[0][0].callback_data.split(":")[2])
+    # La PC se apaga y vuelve a prenderse después de las 24 horas.
+    expire_all_pending(conn, now=local(2026, 11, 7, 9))
+    assert get_action(conn, action_id).status == "pendiente"
+    s2, bot2 = _scheduler(settings, conn, _wallet())
+    await s2.tick(local(2026, 11, 7, 9, 1))
+    expected = (
+        f"Venció la confirmación de la rutina: Transferir $30.000 a Tío Pepe: "
+        f"Pedro Gómez, Brubank, CVU {CVU}. Pedímela cuando quieras."
+    )
+    assert _texts(bot2).count(expected) == 1
+    assert get_action(conn, action_id).status == "vencida"
+    await s2.tick(local(2026, 11, 7, 9, 2))
+    assert _texts(bot2).count(expected) == 1
+
+
+async def test_failed_send_for_one_routine_does_not_stop_the_others(settings, conn):
+    _routine(conn, day=5, created=local(2026, 10, 1, 12), name="Tío Pepe", alias="tio.pepe")
+    _routine(conn, day=5, created=local(2026, 10, 1, 12), name="Fede", alias="fede.mp")
+    s, bot = _scheduler(settings, conn, _wallet())
+    calls = {"n": 0}
+
+    async def flaky(chat_id, text, **kwargs):
+        if text.startswith("Rutina del mes"):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("red caída")
+
+    bot.send_message.side_effect = flaky
+    await s.tick(local(2026, 11, 5, 10))
+    routine_texts = [t for t in _texts(bot) if t.startswith("Rutina del mes")]
+    assert len(routine_texts) == 2  # el primero falló al enviarse, el segundo salió
+
+
+async def test_failed_prepare_notice_still_sends_session_notice(settings, conn):
+    _routine(conn, day=5, created=local(2026, 10, 1, 12))
+    s, bot = _scheduler(settings, conn, FakeWallet(lookup_error=SessionExpired("abrir Fiwind")))
+
+    async def flaky(chat_id, text, **kwargs):
+        if text.startswith("No pude preparar"):
+            raise RuntimeError("red caída")
+
+    bot.send_message.side_effect = flaky
+    await s.tick(local(2026, 11, 5, 10))
+    assert MSG_SESSION_EXPIRED in _texts(bot)
+
+
+async def test_prepare_failure_text_for_contact_without_destinations(settings, conn):
+    c = create_contact(conn, "Tío Pepe")
+    create_routine(conn, c.id, 3000000, 5, hour=10, tz=TZ, now=local(2026, 10, 1, 12))
+    s, bot = _scheduler(settings, conn, _wallet())
+    await s.tick(local(2026, 11, 5, 10))
+    assert (
+        "No pude preparar la rutina ($30.000 a Tío Pepe los días 5): "
+        "Tío Pepe no tiene CBU, CVU ni alias. Pedímela cuando quieras."
+    ) in _texts(bot)
