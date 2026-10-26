@@ -3,6 +3,8 @@ $envFile = Join-Path $env:LOCALAPPDATA "FinancialAgent\.env"
 if (-not (Test-Path $envFile)) {
     $envFile = Join-Path $PSScriptRoot ".env"
 }
+# uv borra las barras invertidas de la ruta de --env-file: se pasa con barras normales.
+$envFile = $envFile -replace '\\', '/'
 
 # Las rutas relativas del .env (por ejemplo data/...) se resuelven desde la carpeta del proyecto.
 Push-Location $PSScriptRoot

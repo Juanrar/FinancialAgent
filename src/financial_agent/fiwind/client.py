@@ -7,6 +7,7 @@ Los logs llevan solo operación, paso y clase del resultado.
 """
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 
@@ -27,6 +28,13 @@ AMOUNT_INPUT = "input[placeholder='Ingresá el monto en pesos']"
 DIALOG = "[role=dialog]"
 SEARCH_DONE_JS = ("document.body.innerText.includes('Destinatario') || "
                   "document.body.innerText.includes('No se encontraron resultados')")
+# get text lee solo el primer [role=dialog], y al aparecer el resultado el diálogo de
+# confirmación puede seguir en el DOM. Se busca el diálogo con "Estado" y un valor debajo.
+_RESULT_DIALOG_JS = ("[...document.querySelectorAll('[role=dialog]')].map(d => d.innerText)"
+                     ".find(t => { const l = t.split('\\n').map(s => s.trim()).filter(Boolean);"
+                     " const i = l.indexOf('Estado'); return i >= 0 && i < l.length - 1; })")
+RESULT_READY_JS = f"{_RESULT_DIALOG_JS} !== undefined"
+RESULT_TEXT_JS = f"{_RESULT_DIALOG_JS} ?? ''"
 
 STEP_OPEN = "abrir Fiwind"
 STEP_SEARCH = "buscar el destino"
@@ -328,8 +336,8 @@ class FiwindClient:
             self._step = STEP_SEND
             browser.run("find", "role", "button", "click", "--name", "Enviar", "--exact")
             self._step = STEP_RESULT
-            browser.run("wait", "--text", "Entendido")
-            status = parse_result_dialog(browser.run("get", "text", DIALOG))
+            browser.run("wait", "--fn", RESULT_READY_JS)
+            status = parse_result_dialog(json.loads(browser.run("eval", RESULT_TEXT_JS)))
         except Exception:
             return Unconfirmed(self._step)
         if status is None:

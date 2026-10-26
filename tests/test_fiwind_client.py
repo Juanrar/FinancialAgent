@@ -1,13 +1,14 @@
 import asyncio
+import json
 
 import pytest
 
 from fakes import FakeBrowser
 from financial_agent.fiwind.client import (
-    AMOUNT_INPUT, DESTINATION_INPUT, DIALOG, LOGIN_URL, PANEL_URL, STEP_AMOUNT, STEP_CONFIRM,
-    STEP_OPEN, STEP_RESULT, STEP_SEARCH, STEP_SEND, WITHDRAWAL_URL, Expired, FiwindClient,
-    FiwindUnavailable, Insufficient, Mismatch, NotSent, SessionExpired, Sent, Unconfirmed,
-    WithdrawalOrder,
+    AMOUNT_INPUT, DESTINATION_INPUT, DIALOG, LOGIN_URL, PANEL_URL, RESULT_READY_JS,
+    RESULT_TEXT_JS, STEP_AMOUNT, STEP_CONFIRM, STEP_OPEN, STEP_RESULT, STEP_SEARCH, STEP_SEND,
+    WITHDRAWAL_URL, Expired, FiwindClient, FiwindUnavailable, Insufficient, Mismatch, NotSent,
+    SessionExpired, Sent, Unconfirmed, WithdrawalOrder,
 )
 from financial_agent.fiwind.pages import Recipient
 from fiwind_samples import (
@@ -17,11 +18,13 @@ from fiwind_samples import (
 
 def _client(responses=None):
     base = {("get", "url"): WITHDRAWAL_URL, ("get", "text", "form"): LOOKUP_FOUND,
-            ("get", "text", DIALOG): [CONFIRM_DIALOG, RESULT_DIALOG], ("snapshot", "-c"): DASHBOARD}
+            ("get", "text", DIALOG): [CONFIRM_DIALOG], ("eval", RESULT_TEXT_JS): RESULT_EVAL,
+            ("snapshot", "-c"): DASHBOARD}
     browser = FakeBrowser(base | (responses or {}))
     return FiwindClient(browser), browser
 
 
+RESULT_EVAL = json.dumps(RESULT_DIALOG)
 ORDER = WithdrawalOrder(CVU, HOLDER, CVU, 1000)
 SEND = ("find", "role", "button", "click", "--name", "Enviar", "--exact")
 BUSCAR = ("find", "role", "button", "click", "--name", "Buscar")
@@ -122,13 +125,22 @@ async def test_withdraw_fails_on_send_click():
     assert await client.withdraw(ORDER) == Unconfirmed(STEP_SEND)
 
 
+async def test_withdraw_reads_result_dialog_not_first_dialog():
+    # Si el diálogo de confirmación sigue en el DOM, get text lee ese y no el resultado.
+    client, browser = _client({("get", "text", DIALOG): CONFIRM_DIALOG})
+    assert await client.withdraw(ORDER) == Sent("En proceso")
+    assert browser.calls.index(("wait", "--fn", RESULT_READY_JS)) < browser.calls.index(
+        ("eval", RESULT_TEXT_JS))
+
+
 async def test_withdraw_without_result_screen():
-    client, _ = _client({("wait", "--text", "Entendido"): RuntimeError()})
+    client, _ = _client({("wait", "--fn", RESULT_READY_JS): RuntimeError()})
     assert await client.withdraw(ORDER) == Unconfirmed(STEP_RESULT)
 
 
-async def test_withdraw_unreadable_result():
-    client, _ = _client({("get", "text", DIALOG): [CONFIRM_DIALOG, "nada"]})
+@pytest.mark.parametrize("output", [json.dumps(""), json.dumps("nada"), "nada"])
+async def test_withdraw_unreadable_result(output):
+    client, _ = _client({("eval", RESULT_TEXT_JS): output})
     assert await client.withdraw(ORDER) == Unconfirmed(STEP_RESULT)
 
 
