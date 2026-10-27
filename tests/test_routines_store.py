@@ -22,6 +22,7 @@ from financial_agent.store.routines import (
     mark_sent,
     monthly_total,
     next_run_date,
+    upcoming_routines,
     update_routine,
 )
 from financial_agent.validation import ValidationError
@@ -228,3 +229,47 @@ def test_next_run_date_year_end_and_short_month(conn):
     assert next_run_date(_r(conn, 5, dec), dec, hour=10, tz=TZ) == date(2027, 1, 5)
     oct_ = datetime(2026, 10, 31, 12, tzinfo=ZoneInfo(TZ))
     assert next_run_date(_r(conn, 31, oct_), oct_, hour=10, tz=TZ) == date(2026, 11, 30)
+
+
+def test_upcoming_routines_window_is_today_plus_three_days(conn):
+    created = local(2026, 10, 20, 12)
+    today = _r(conn, 2, created)
+    last = _r(conn, 5, created)
+    _r(conn, 6, created)
+    sent = _r(conn, 1, created)
+    mark_sent(conn, sent.id, "2026-11")
+    check = local(2026, 11, 2, 9)
+    assert upcoming_routines(conn, check, days=3, tz=TZ) == [
+        (today, date(2026, 11, 2)),
+        (last, date(2026, 11, 5)),
+    ]
+    # 02:00 UTC del 3 es todavía el 2 en Buenos Aires.
+    utc = datetime(2026, 11, 3, 2, tzinfo=ZoneInfo("UTC"))
+    assert upcoming_routines(conn, utc, days=3, tz=TZ) == [
+        (today, date(2026, 11, 2)),
+        (last, date(2026, 11, 5)),
+    ]
+
+
+def test_upcoming_routines_crosses_month_and_year(conn):
+    end_of_month = _r(conn, 31, local(2026, 10, 1, 12))
+    next_month = _r(conn, 1, local(2026, 10, 20, 12))
+    _r(conn, 3, local(2026, 10, 20, 12))
+    assert upcoming_routines(conn, local(2026, 10, 30, 9), days=3, tz=TZ) == [
+        (end_of_month, date(2026, 10, 31)),
+        (next_month, date(2026, 11, 1)),
+    ]
+    for r in list_routines(conn):
+        mark_sent(conn, r.id, "2026-12")
+    assert upcoming_routines(conn, local(2026, 12, 30, 9), days=3, tz=TZ) == [
+        (get_routine(conn, next_month.id), date(2027, 1, 1)),
+    ]
+
+
+def test_upcoming_routines_includes_overdue_unsent(conn):
+    # La PC estuvo apagada el 5: la rutina sale en el próximo tick y necesita saldo.
+    r = _r(conn, 5, local(2026, 10, 1, 12))
+    assert r.last_sent_month is None
+    assert upcoming_routines(conn, local(2026, 11, 8, 9), days=3, tz=TZ) == [
+        (r, date(2026, 11, 5)),
+    ]

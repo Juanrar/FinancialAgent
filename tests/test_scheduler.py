@@ -100,88 +100,98 @@ async def test_routine_prepare_fails(settings, conn):
     assert len(_texts(bot)) == count
 
 
-async def test_monthly_summary(settings, conn):
+def _two_routines(conn):
     _routine(conn, day=5, created=local(2026, 10, 1, 12), amount=3000000)
-    _routine(conn, day=10, created=local(2026, 10, 1, 12), amount=1500000, name="Ana", alias="ana.mp")
-    s, bot = _scheduler(settings, conn, _wallet(balance=300))
-    summary = "Este mes tus rutinas suman $45.000. Saldo en Fiwind: $3."
-    await s.tick(local(2026, 11, 1, 10))
-    assert _texts(bot).count(summary) == 1
-    await s.tick(local(2026, 11, 1, 11))
-    assert _texts(bot).count(summary) == 1
-    await s.tick(local(2026, 12, 1, 10))
-    assert _texts(bot).count(summary) == 2
+    _routine(conn, day=6, created=local(2026, 10, 1, 12), amount=1500000, name="Ana", alias="ana.mp")
 
 
-async def test_summary_without_balance(settings, conn):
-    _routine(conn, day=5, created=local(2026, 10, 1, 12))
-    s, bot = _scheduler(settings, conn, _wallet(balance_error=SessionExpired("abrir Fiwind")))
-    await s.tick(local(2026, 11, 1, 10))
-    assert (
-        "Este mes tus rutinas suman $30.000. Saldo en Fiwind: no lo pude leer (venció la sesión)."
-    ) in _texts(bot)
-
-    s, bot = _scheduler(settings, conn, _wallet(available=False))
-    await s.tick(local(2026, 12, 1, 10))
-    assert (
-        "Este mes tus rutinas suman $30.000. Saldo en Fiwind: "
-        "no lo pude leer (agent-browser no está instalado)."
-    ) in _texts(bot)
+SHORT = (
+    "Te faltan $33.000 en Fiwind para las rutinas de los próximos días. Saldo: $12.000. "
+    "Rutinas: $30.000 a Tío Pepe el 5 y $15.000 a Ana el 6."
+)
 
 
-async def test_summary_balance_step_failure_and_missing(settings, conn):
-    _routine(conn, day=5, created=local(2026, 10, 1, 12))
-    s, bot = _scheduler(settings, conn, _wallet(balance_error=FiwindUnavailable("leer saldo", "x")))
-    await s.tick(local(2026, 11, 1, 10))
-    assert (
-        "Este mes tus rutinas suman $30.000. Saldo en Fiwind: no lo pude leer (falló el paso leer saldo)."
-    ) in _texts(bot)
-
-    s, bot = _scheduler(settings, conn, _wallet(balance=None))
-    await s.tick(local(2026, 12, 1, 10))
-    assert (
-        "Este mes tus rutinas suman $30.000. Saldo en Fiwind: no lo pude leer (Fiwind no mostró el saldo)."
-    ) in _texts(bot)
-
-
-async def test_no_summary_without_routines(settings, conn):
-    s, bot = _scheduler(settings, conn, _wallet())
-    await s.tick(local(2026, 11, 1, 10))
-    assert not any(t.startswith("Este mes") for t in _texts(bot))
-
-
-async def test_daily_session_check(settings, conn):
-    s, bot = _scheduler(settings, conn, _wallet(session_ok=False))
-    await s.tick(local(2026, 11, 5, 8, 59))
+async def test_balance_warning_when_short_repeats_daily(settings, conn):
+    _two_routines(conn)
+    s, bot = _scheduler(settings, conn, _wallet(balance=1200000))
+    await s.tick(local(2026, 11, 3, 8, 59))
     assert _texts(bot) == []
+    await s.tick(local(2026, 11, 3, 9))
+    assert _texts(bot) == [SHORT]
+    await s.tick(local(2026, 11, 3, 9, 30))
+    assert _texts(bot) == [SHORT]
+    await s.tick(local(2026, 11, 4, 9))
+    assert _texts(bot) == [SHORT, SHORT]
+
+
+async def test_balance_warning_only_counts_routines_in_window(settings, conn):
+    _two_routines(conn)
+    s, bot = _scheduler(settings, conn, _wallet(balance=1200000))
+    await s.tick(local(2026, 11, 2, 9))
+    assert _texts(bot) == [
+        "Te faltan $18.000 en Fiwind para las rutinas de los próximos días. Saldo: $12.000. "
+        "Rutina: $30.000 a Tío Pepe el 5."
+    ]
+
+
+async def test_no_message_when_balance_covers(settings, conn):
+    _two_routines(conn)
+    s, bot = _scheduler(settings, conn, _wallet(balance=4500000))
+    await s.tick(local(2026, 11, 1, 9))
+    await s.tick(local(2026, 11, 1, 10))
+    await s.tick(local(2026, 11, 3, 9))
+    assert _texts(bot) == []
+
+
+async def test_balance_read_daily_without_routines_in_window(settings, conn):
+    _routine(conn, day=20, created=local(2026, 10, 1, 12))
+    wallet = _wallet(balance=0)
+    s, bot = _scheduler(settings, conn, wallet)
+    await s.tick(local(2026, 11, 3, 9))
+    assert wallet.calls == [("read_balance",)]
+    assert _texts(bot) == []
+
+
+async def test_balance_check_warns_expired_session_once_a_day(settings, conn):
+    s, bot = _scheduler(settings, conn, _wallet(balance_error=SessionExpired("abrir Fiwind")))
     await s.tick(local(2026, 11, 5, 9))
-    assert _texts(bot) == [MSG_SESSION_EXPIRED]
     await s.tick(local(2026, 11, 5, 9, 30))
     assert _texts(bot) == [MSG_SESSION_EXPIRED]
-
-    s, bot = _scheduler(settings, conn, _wallet(session_ok=True))
     await s.tick(local(2026, 11, 6, 9))
+    assert _texts(bot) == [MSG_SESSION_EXPIRED, MSG_SESSION_EXPIRED]
+
+
+async def test_unreadable_balance_sends_nothing(settings, conn):
+    _two_routines(conn)
+    s, bot = _scheduler(settings, conn, _wallet(balance=None))
+    await s.tick(local(2026, 11, 3, 9))
     assert _texts(bot) == []
 
+    error = FiwindUnavailable("abrir Fiwind", "ventana de login abierta")
+    s, bot = _scheduler(settings, conn, _wallet(balance_error=error))
+    await s.tick(local(2026, 11, 4, 9))
+    assert _texts(bot) == []
+
+
+async def test_no_balance_check_without_browser(settings, conn):
+    _two_routines(conn)
     wallet = _wallet(available=False)
     s, bot = _scheduler(settings, conn, wallet)
-    await s.tick(local(2026, 11, 7, 9))
-    assert ("check_session",) not in wallet.calls and _texts(bot) == []
+    await s.tick(local(2026, 11, 3, 9))
+    assert wallet.calls == [] and _texts(bot) == []
 
 
-async def test_session_check_unavailable_sends_nothing_and_tick_continues(settings, conn):
+async def test_balance_check_failure_does_not_stop_routines(settings, conn):
     _routine(conn, day=5, created=local(2026, 10, 1, 12))
-    wallet = _wallet(session_error=FiwindUnavailable("abrir Fiwind", "ventana de login abierta"))
-    s, bot = _scheduler(settings, conn, wallet)
+    error = FiwindUnavailable("abrir Fiwind", "ventana de login abierta")
+    s, bot = _scheduler(settings, conn, _wallet(balance_error=error))
     await s.tick(local(2026, 11, 5, 10))
-    assert ("check_session",) in wallet.calls
-    assert MSG_SESSION_EXPIRED not in _texts(bot)
     assert len(_routine_messages(bot)) == 1
 
 
 async def test_unexpected_step_error_does_not_skip_later_steps(settings, conn):
     _routine(conn, day=5, created=local(2026, 10, 1, 12))
-    s, bot = _scheduler(settings, conn, _wallet(session_error=RuntimeError("x")))
+    s, bot = _scheduler(settings, conn, _wallet(balance_error=RuntimeError("x")))
     await s.tick(local(2026, 11, 5, 10))
     assert len(_routine_messages(bot)) == 1
 

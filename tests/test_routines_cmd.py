@@ -16,9 +16,9 @@ from financial_agent.store.routines import create_routine, list_routines
 TZ = "America/Argentina/Buenos_Aires"
 
 
-def _routine(conn):
-    contact = store.create_contact(conn, "Tío Pepe")
-    return create_routine(conn, contact.id, 3_000_000, 5, hour=9, tz=TZ)
+def _routine(conn, name="Tío Pepe", amount=3_000_000, day=5):
+    contact = store.create_contact(conn, name)
+    return create_routine(conn, contact.id, amount, day, hour=9, tz=TZ)
 
 
 def _context(conn):
@@ -38,7 +38,9 @@ def _callback_update(data):
 
 def test_format_routines(conn):
     r = _routine(conn)
-    assert format_routines(conn, [r]) == "Rutinas:\n1. $30.000 a Tío Pepe los días 5"
+    assert format_routines(conn, [r]) == (
+        "Rutinas:\n1. $30.000 a Tío Pepe los días 5\nTotal por mes: $30.000"
+    )
     assert routines_keyboard([r]).inline_keyboard[0][0].callback_data == f"r:del:{r.id}"
     assert routines_keyboard([]) is None
 
@@ -51,10 +53,14 @@ async def test_on_rutinas_empty(conn):
 
 async def test_on_rutinas_lists(conn):
     r = _routine(conn)
+    _routine(conn, name="Ana", amount=1_500_000, day=10)
     message = SimpleNamespace(reply_text=AsyncMock())
     await on_rutinas(SimpleNamespace(effective_message=message), _context(conn))
     call = message.reply_text.await_args
-    assert call.args[0] == "Rutinas:\n1. $30.000 a Tío Pepe los días 5"
+    assert call.args[0] == (
+        "Rutinas:\n1. $30.000 a Tío Pepe los días 5\n2. $15.000 a Ana los días 10\n"
+        "Total por mes: $45.000"
+    )
     assert call.kwargs["reply_markup"].inline_keyboard[0][0].callback_data == f"r:del:{r.id}"
 
 

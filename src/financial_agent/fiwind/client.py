@@ -123,13 +123,6 @@ class FiwindClient:
 
     # --- operaciones públicas ---
 
-    async def check_session(self) -> bool:
-        async with self._lock:
-            self._require_ready()
-            result = await self._guarded("check_session", self._check_session_sync)
-            logger.info("fiwind check_session: resultado=%s", "activa" if result else "vencida")
-            return result
-
     async def lookup(self, destination: str) -> Recipient | None:
         async with self._lock:
             self._require_ready()
@@ -259,13 +252,6 @@ class FiwindClient:
         browser.run("wait", "--load", "networkidle")
         if "/auth/" in browser.run("get", "url"):
             raise SessionExpired(STEP_OPEN)
-
-    def _check_session_sync(self) -> bool:
-        try:
-            self._open_panel()
-            return True
-        except SessionExpired:
-            return False
 
     def _read_balance_sync(self) -> int | None:
         self._open_panel()

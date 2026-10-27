@@ -406,7 +406,8 @@ def build_tools(
         found = routines.list_routines(conn)
         if not found:
             return _ok("No hay rutinas.")
-        return _ok("\n".join(f"id={r.id} {routines.describe_routine(conn, r)}" for r in found))
+        lines = [f"id={r.id} {routines.describe_routine(conn, r)}" for r in found]
+        return _ok("\n".join([*lines, routines.describe_total(conn)]))
 
     return [
         buscar_contactos,

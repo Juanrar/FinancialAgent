@@ -27,7 +27,7 @@ from financial_agent.agent.tools import ALLOWED_TOOLS, SERVER_NAME, TurnState, b
 from financial_agent.config import Settings
 from financial_agent.fiwind.client import FiwindClient
 from financial_agent.store.memory import list_notes
-from financial_agent.store.routines import describe_routine, list_routines
+from financial_agent.store.routines import describe_routine, describe_total, list_routines
 from financial_agent.store.pending import PendingAction
 
 logger = logging.getLogger(__name__)
@@ -187,6 +187,8 @@ class AgentSession:
         routine_lines = [
             f"[id={r.id}] {describe_routine(self._conn, r)}" for r in list_routines(self._conn)
         ]
+        if routine_lines:
+            routine_lines.append(describe_total(self._conn))
         server = build_server(
             self._conn,
             self.turn,

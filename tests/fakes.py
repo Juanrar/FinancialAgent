@@ -44,7 +44,7 @@ class FakeWallet:
     def __init__(self, available=True,
                  recipient=Recipient("Federico Pérez", "Brubank", "0000168300000000123459"),
                  lookup_error=None, outcome=Sent("En proceso"), balance=300,
-                 balance_error=None, session_ok=True, session_error=None, login_ok=True,
+                 balance_error=None, login_ok=True,
                  delay=0.0):
         self.available = available
         self.recipient = recipient
@@ -52,8 +52,6 @@ class FakeWallet:
         self.outcome = outcome
         self.balance = balance
         self.balance_error = balance_error
-        self.session_ok = session_ok
-        self.session_error = session_error
         self.login_ok = login_ok
         self.delay = delay
         self.calls: list[tuple] = []
@@ -75,12 +73,6 @@ class FakeWallet:
         if self.balance_error:
             raise self.balance_error
         return self.balance
-
-    async def check_session(self):
-        self.calls.append(("check_session",))
-        if self.session_error:
-            raise self.session_error
-        return self.session_ok
 
     async def open_login_window(self):
         self.calls.append(("open_login_window",))

@@ -1,7 +1,7 @@
 import calendar
 import sqlite3
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from financial_agent.money import format_amount
@@ -63,11 +63,13 @@ def next_run_date(routine: Routine, now: datetime, *, hour: int, tz: str) -> dat
         routine.day, local_now, hour
     ):
         year, month = local_now.year, local_now.month
-    elif local_now.month == 12:
-        year, month = local_now.year + 1, 1
     else:
-        year, month = local_now.year, local_now.month + 1
+        year, month = _following_month(local_now.year, local_now.month)
     return date(year, month, effective_day(routine.day, year, month))
+
+
+def _following_month(year: int, month: int) -> tuple[int, int]:
+    return (year + 1, 1) if month == 12 else (year, month + 1)
 
 
 def _initial_last_sent(day: int, now: datetime, hour: int, tz: str) -> str | None:
@@ -179,6 +181,27 @@ def due_routines(
     ]
 
 
+def upcoming_routines(
+    conn: sqlite3.Connection, now: datetime, *, days: int, tz: str
+) -> list[tuple[Routine, date]]:
+    """Rutinas sin mandar cuya fecha cae entre hoy y `days` días después, con su fecha.
+
+    Incluye las de este mes que ya pasaron sin mandarse: salen en el próximo tick.
+    """
+    local_now = _local(now, tz)
+    limit = local_now.date() + timedelta(days=days)
+    found = []
+    for routine in list_routines(conn):
+        if routine.last_sent_month != month_key(local_now):
+            year, month = local_now.year, local_now.month
+        else:
+            year, month = _following_month(local_now.year, local_now.month)
+        when = date(year, month, effective_day(routine.day, year, month))
+        if when <= limit:
+            found.append((routine, when))
+    return sorted(found, key=lambda item: item[1])
+
+
 def mark_sent(conn: sqlite3.Connection, routine_id: int, month: str) -> None:
     get_routine(conn, routine_id)
     with conn:
@@ -188,6 +211,10 @@ def mark_sent(conn: sqlite3.Connection, routine_id: int, month: str) -> None:
 def monthly_total(conn: sqlite3.Connection) -> int:
     row = conn.execute("SELECT COALESCE(SUM(amount_cents), 0) AS total FROM routines").fetchone()
     return row["total"]
+
+
+def describe_total(conn: sqlite3.Connection) -> str:
+    return f"Total por mes: {format_amount(monthly_total(conn))}"
 
 
 def describe_routine(conn: sqlite3.Connection, routine: Routine) -> str:

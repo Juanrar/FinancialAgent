@@ -9,15 +9,15 @@ from financial_agent.bot.fiwind_session import send_session_expired
 from financial_agent.config import Settings
 from financial_agent.fiwind.client import FiwindUnavailable, SessionExpired
 from financial_agent.money import format_amount
+from financial_agent.store.contacts import get_contact
 from financial_agent.store.db import utc_now
 from financial_agent.store.pending import expire_overdue_routine_actions
 from financial_agent.store.routines import (
     describe_routine,
     due_routines,
-    list_routines,
     mark_sent,
     month_key,
-    monthly_total,
+    upcoming_routines,
 )
 from financial_agent.store.state import get_state, set_state
 from financial_agent.transfers import prepare_transfer
@@ -25,12 +25,10 @@ from financial_agent.validation import ValidationError
 
 logger = logging.getLogger(__name__)
 
-SESSION_CHECK_KEY = "session_check_date"
-SUMMARY_KEY = "summary_month"
+BALANCE_CHECK_KEY = "balance_check_date"
+LOOKAHEAD_DAYS = 3
 _REASON_EXPIRED = "venció la sesión"
 _PREPARE_EXPIRED = "la sesión de Fiwind venció"
-_REASON_NO_BROWSER = "agent-browser no está instalado"
-_REASON_NO_BALANCE = "Fiwind no mostró el saldo"
 
 
 def _reason(error: Exception, expired: str = _REASON_EXPIRED) -> str:
@@ -42,6 +40,12 @@ def _reason(error: Exception, expired: str = _REASON_EXPIRED) -> str:
         # Los motivos escritos para Claude se traducen; el resto no termina en punto.
         return getattr(error, "for_juan", None) or str(error).rstrip(".")
     return "algo falló"
+
+
+def _join(items: list[str]) -> str:
+    if len(items) == 1:
+        return items[0]
+    return ", ".join(items[:-1]) + " y " + items[-1]
 
 
 class Scheduler:
@@ -69,8 +73,7 @@ class Scheduler:
         now = now or self.clock()
         local = now.astimezone(ZoneInfo(self.settings.timezone))
         steps = (
-            self._check_session,
-            self._send_summary,
+            self._check_balance,
             self._send_routines,
             self._announce_expired,
         )
@@ -80,46 +83,43 @@ class Scheduler:
             except Exception as error:
                 logger.error("falló un paso del scheduler (%s): %s", step.__name__, type(error).__name__)
 
-    async def _check_session(self, now: datetime, local: datetime) -> None:
+    async def _check_balance(self, now: datetime, local: datetime) -> None:
+        """Lee el saldo una vez por día y avisa solo si no alcanza para las rutinas
+        de los próximos días. La lectura también sirve de chequeo de sesión."""
         today = local.date().isoformat()
         if (
             not self.wallet.available
             or local.hour < self.settings.routine_hour - 1
-            or get_state(self.conn, SESSION_CHECK_KEY) == today
+            or get_state(self.conn, BALANCE_CHECK_KEY) == today
         ):
             return
-        set_state(self.conn, SESSION_CHECK_KEY, today)
-        try:
-            ok = await self.wallet.check_session()
-        except FiwindUnavailable as error:
-            logger.warning("no se pudo chequear la sesión de Fiwind: %s", type(error).__name__)
-            return
-        if not ok:
-            await send_session_expired(self.bot, self.settings.telegram_owner_id)
-
-    async def _balance_text(self) -> str:
-        if not self.wallet.available:
-            return f"no lo pude leer ({_REASON_NO_BROWSER})"
+        set_state(self.conn, BALANCE_CHECK_KEY, today)
         try:
             balance = await self.wallet.read_balance()
-        except (SessionExpired, FiwindUnavailable) as error:
-            return f"no lo pude leer ({_reason(error)})"
-        if balance is None:
-            return f"no lo pude leer ({_REASON_NO_BALANCE})"
-        return format_amount(balance)
-
-    async def _send_summary(self, now: datetime, local: datetime) -> None:
-        month = month_key(local)
-        if (
-            local.hour < self.settings.routine_hour
-            or get_state(self.conn, SUMMARY_KEY) == month
-            or not list_routines(self.conn)
-        ):
+        except SessionExpired:
+            await send_session_expired(self.bot, self.settings.telegram_owner_id)
             return
-        set_state(self.conn, SUMMARY_KEY, month)
-        total = format_amount(monthly_total(self.conn))
+        except FiwindUnavailable as error:
+            logger.warning("no se pudo leer el saldo de Fiwind: %s", type(error).__name__)
+            return
+        if balance is None:
+            logger.warning("no se pudo leer el saldo de Fiwind: el panel no lo mostró")
+            return
+        upcoming = upcoming_routines(
+            self.conn, now, days=LOOKAHEAD_DAYS, tz=self.settings.timezone
+        )
+        needed = sum(routine.amount_cents for routine, _ in upcoming)
+        if balance >= needed:
+            return
+        items = [
+            f"{format_amount(routine.amount_cents)} a "
+            f"{get_contact(self.conn, routine.contact_id).name} el {when.day}"
+            for routine, when in upcoming
+        ]
+        label = "Rutina" if len(items) == 1 else "Rutinas"
         await self._send(
-            f"Este mes tus rutinas suman {total}. Saldo en Fiwind: {await self._balance_text()}."
+            f"Te faltan {format_amount(needed - balance)} en Fiwind para las rutinas de los "
+            f"próximos días. Saldo: {format_amount(balance)}. {label}: {_join(items)}."
         )
 
     async def _send_routines(self, now: datetime, local: datetime) -> None:

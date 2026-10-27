@@ -5,7 +5,13 @@ from telegram.ext import ContextTypes
 
 from financial_agent.bot.callback_data import make_callback, parse_callback
 from financial_agent.store.db import NotFoundError
-from financial_agent.store.routines import Routine, delete_routine, describe_routine, list_routines
+from financial_agent.store.routines import (
+    Routine,
+    delete_routine,
+    describe_routine,
+    describe_total,
+    list_routines,
+)
 
 PREFIX = "r"
 MSG_EMPTY = "No hay rutinas. Las creás hablando conmigo."
@@ -16,7 +22,7 @@ def format_routines(conn: sqlite3.Connection, routines: list[Routine]) -> str:
     if not routines:
         return MSG_EMPTY
     lines = [f"{pos}. {describe_routine(conn, r)}" for pos, r in enumerate(routines, start=1)]
-    return "\n".join(["Rutinas:", *lines])
+    return "\n".join(["Rutinas:", *lines, describe_total(conn)])
 
 
 def routines_keyboard(routines: list[Routine]) -> InlineKeyboardMarkup | None:

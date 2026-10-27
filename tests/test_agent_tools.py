@@ -288,6 +288,15 @@ async def test_routine_tools(conn):
     assert f"id={rid} $35.000 a Tío Pepe los días 5" in _text(listed)
 
 
+async def test_listar_rutinas_total(conn):
+    tools, _ = _tools(conn)
+    for name, alias, amount in (("Tío Pepe", "tio.pepe", "30000"), ("Ana", "ana.mp", "15000")):
+        c = create_contact(conn, name)
+        add_destination(conn, c.id, "alias", alias)
+        await tools["crear_rutina"].handler({"contacto_id": c.id, "monto": amount, "dia": 5})
+    assert _text(await tools["listar_rutinas"].handler({})).endswith("\nTotal por mes: $45.000")
+
+
 async def test_listar_rutinas_empty(conn):
     tools, _ = _tools(conn)
     assert _text(await tools["listar_rutinas"].handler({})) == "No hay rutinas."

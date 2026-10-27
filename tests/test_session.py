@@ -136,10 +136,15 @@ async def test_open_passes_routines_to_prompt(conn, settings):
     c = create_contact(conn, "Tío Pepe")
     add_destination(conn, c.id, "alias", "tio.pepe")
     rid = create_routine(conn, c.id, 3000000, 5, hour=10, tz=settings.timezone).id
+    ana = create_contact(conn, "Ana")
+    add_destination(conn, ana.id, "alias", "ana.mp")
+    create_routine(conn, ana.id, 1500000, 10, hour=10, tz=settings.timezone)
     factory = FakeFactory([INIT_OK, result()])
     session = AgentSession(settings, conn, client_factory=factory)
     await session.send("hola")
-    assert f"[id={rid}] $30.000 a Tío Pepe los días 5" in factory.options[0].system_prompt
+    prompt = factory.options[0].system_prompt
+    assert f"[id={rid}] $30.000 a Tío Pepe los días 5" in prompt
+    assert "$15.000 a Ana los días 10\nTotal por mes: $45.000" in prompt
 
 
 async def test_unexpected_tool_aborts(conn, settings):

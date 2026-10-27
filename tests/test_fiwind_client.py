@@ -161,7 +161,7 @@ async def test_without_browser():
     with pytest.raises(FiwindUnavailable):
         await client.lookup("x.y.z")
     with pytest.raises(FiwindUnavailable) as info:
-        await client.check_session()
+        await client.read_balance()
     assert info.value.reason == "agent-browser no está instalado"
 
 
@@ -174,16 +174,14 @@ async def test_operations_are_serialized():
     assert opens[1] > closes[2]  # el segundo open llega después del close final del primero
 
 
-async def test_read_balance_and_session():
+async def test_read_balance():
     client, browser = _client({("get", "url"): PANEL_URL})
     assert await client.read_balance() == 300
     assert ("open", PANEL_URL, None) in browser.calls
-    assert await client.check_session() is True
 
 
 async def test_session_expired_in_panel():
     client, _ = _client({("get", "url"): LOGIN_URL})
-    assert await client.check_session() is False
     with pytest.raises(SessionExpired):
         await client.read_balance()
 
@@ -199,15 +197,15 @@ async def test_login_window():
     assert browser.calls[-1] == ("close",)
 
 
-async def test_check_session_raises_on_login_window_and_browser_error():
+async def test_read_balance_raises_on_login_window_and_browser_error():
     client, _ = _client({("get", "url"): PANEL_URL})
     await client.open_login_window()
     with pytest.raises(FiwindUnavailable) as info:
-        await client.check_session()
+        await client.read_balance()
     assert (info.value.step, info.value.reason) == (STEP_OPEN, "la ventana de login está abierta")
     client, _ = _client({("wait", "--load"): RuntimeError()})
     with pytest.raises(FiwindUnavailable) as info:
-        await client.check_session()
+        await client.read_balance()
     assert info.value.step == STEP_OPEN
 
 
