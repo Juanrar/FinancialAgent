@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from history_helpers import finished_transfer
 
 from financial_agent.store.contacts import (
     add_destination,
@@ -22,8 +23,10 @@ from financial_agent.store.pending import (
     expire_overdue_routine_actions,
     finish_transfer,
     get_action,
+    list_transfers,
     mark_done_manually,
     mark_in_flight_unconfirmed,
+    status_label,
 )
 
 T0 = datetime(2026, 10, 20, 12, tzinfo=UTC)
@@ -327,3 +330,69 @@ def test_update_verification_agent_text_has_no_fiwind_data(conn):
     for secret in ("Federico", "Ualá", CVU):
         assert secret not in agent_text(a)
     assert agent_text(get_action(conn, a.id)) == agent_text(a)
+
+
+def _history_dest(conn, name, alias):
+    c = create_contact(conn, name)
+    d = add_destination(conn, c.id, "alias", alias)
+    set_verification(conn, d.id, f"{name} Titular", CVU, "Brubank")
+    return c, d
+
+
+def _finished(conn, dest, when, status, detail=None):
+    return finished_transfer(conn, dest, when, f"Transferencia a {dest.value}", status, detail)
+
+
+def test_list_transfers_only_finished_newest_first(conn):
+    _, d = _history_dest(conn, "Fede", "fede.mp")
+    sent = _finished(conn, d, T0, "enviada")
+    failed = _finished(conn, d, T0 + timedelta(days=1), "no_salio", "saldo insuficiente")
+    cancelled = create_action(conn, "transfer", {"destination_id": d.id, "amount_cents": 100,
+                              "agent_text": "x"}, now=T0 + timedelta(days=2))
+    cancel_action(conn, cancelled.id, now=T0 + timedelta(days=2))
+    create_action(conn, "transfer", {"destination_id": d.id, "amount_cents": 100,
+                  "agent_text": "x"}, now=T0 + timedelta(days=3))
+    manual = _finished(conn, d, T0 + timedelta(days=4), "hecha_a_mano")
+    unknown = _finished(conn, d, T0 + timedelta(days=5), "sin_confirmar", "enviar")
+    other = create_action(conn, "set_primary", {"destination_id": d.id}, now=T0)
+    confirm_action(conn, other.id, now=T0 + timedelta(days=6))
+
+    found = list_transfers(conn)
+    assert [a.id for a in found] == [unknown, manual, failed, sent]
+    assert [a.status for a in found] == ["sin_confirmar", "hecha_a_mano", "no_salio", "enviada"]
+    assert found[0].resolved_at == T0 + timedelta(days=5)
+
+
+def test_list_transfers_by_contact(conn):
+    _, fede = _history_dest(conn, "Fede", "fede.mp")
+    ana, ana_dest = _history_dest(conn, "Ana", "ana.mp")
+    _finished(conn, fede, T0, "enviada")
+    mine = _finished(conn, ana_dest, T0 + timedelta(hours=1), "enviada")
+    assert [a.id for a in list_transfers(conn, contact_id=ana.id)] == [mine]
+
+
+def test_list_transfers_by_period(conn):
+    _, d = _history_dest(conn, "Fede", "fede.mp")
+    since = datetime(2026, 11, 1, 0, 0, tzinfo=UTC)
+    until = datetime(2026, 12, 1, 0, 0, tzinfo=UTC)
+    _finished(conn, d, since - timedelta(microseconds=1), "enviada")
+    first = _finished(conn, d, since, "enviada")
+    last = _finished(conn, d, until - timedelta(microseconds=1), "enviada")
+    _finished(conn, d, until, "enviada")
+    assert [a.id for a in list_transfers(conn, since=since, until=until)] == [last, first]
+
+
+def test_status_label(conn):
+    _, d = _history_dest(conn, "Fede", "fede.mp")
+    _finished(conn, d, T0, "enviada")
+    _finished(conn, d, T0 + timedelta(hours=1), "no_salio", "saldo insuficiente")
+    _finished(conn, d, T0 + timedelta(hours=2), "no_salio")
+    _finished(conn, d, T0 + timedelta(hours=3), "sin_confirmar", "enviar")
+    _finished(conn, d, T0 + timedelta(hours=4), "hecha_a_mano")
+    assert [status_label(a) for a in list_transfers(conn)] == [
+        "hecha a mano",
+        "sin confirmar",
+        "no salió",
+        "no salió (saldo insuficiente)",
+        "enviada",
+    ]

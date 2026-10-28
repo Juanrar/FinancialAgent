@@ -12,6 +12,13 @@ from financial_agent.validation import DESTINATION_LABELS, ValidationError, acco
 PENDING_TTL = timedelta(minutes=10)
 ROUTINE_TTL = timedelta(hours=24)
 _RESTART_DETAIL = "la app se reinició durante el envío"
+# Estados de una transferencia terminada, con el texto que ve Juan.
+_HISTORY_LABELS = {
+    "enviada": "enviada",
+    "no_salio": "no salió",
+    "sin_confirmar": "sin confirmar",
+    "hecha_a_mano": "hecha a mano",
+}
 
 ActionKind = Literal[
     "delete_contact",
@@ -48,6 +55,7 @@ class PendingAction:
     expires_at: datetime
     routine_id: int | None = None
     detail: str | None = None
+    resolved_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -72,6 +80,7 @@ def _from_row(row: sqlite3.Row) -> PendingAction:
         datetime.fromisoformat(row["expires_at"]),
         row["routine_id"],
         row["detail"],
+        datetime.fromisoformat(row["resolved_at"]) if row["resolved_at"] else None,
     )
 
 
@@ -296,6 +305,41 @@ def mark_done_manually(
             (_iso(now), action_id),
         )
     return cur.rowcount == 1
+
+
+def list_transfers(
+    conn: sqlite3.Connection,
+    *,
+    contact_id: int | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> list[PendingAction]:
+    """Transferencias terminadas, de la más nueva a la más vieja. Las pendientes,
+    canceladas o vencidas no movieron plata y no aparecen."""
+    marks = ", ".join("?" * len(_HISTORY_LABELS))
+    sql = f"SELECT * FROM pending_actions WHERE kind = 'transfer' AND status IN ({marks})"
+    params: list = list(_HISTORY_LABELS)
+    if contact_id is not None:
+        sql += (
+            " AND json_extract(payload, '$.destination_id') IN"
+            " (SELECT id FROM destinations WHERE contact_id = ?)"
+        )
+        params.append(contact_id)
+    if since is not None:
+        sql += " AND resolved_at >= ?"
+        params.append(_iso(since))
+    if until is not None:
+        sql += " AND resolved_at < ?"
+        params.append(_iso(until))
+    sql += " ORDER BY resolved_at DESC, id DESC"
+    return [_from_row(row) for row in conn.execute(sql, params).fetchall()]
+
+
+def status_label(action: PendingAction) -> str:
+    label = _HISTORY_LABELS.get(action.status, action.status)
+    if action.status == "no_salio" and action.detail:
+        return f"{label} ({action.detail})"
+    return label
 
 
 def expire_overdue_routine_actions(

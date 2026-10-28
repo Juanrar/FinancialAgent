@@ -26,6 +26,7 @@ from financial_agent.agent.instructions import build_system_prompt
 from financial_agent.agent.tools import ALLOWED_TOOLS, SERVER_NAME, TurnState, build_server
 from financial_agent.config import Settings
 from financial_agent.fiwind.client import FiwindClient
+from financial_agent.store.db import utc_now
 from financial_agent.store.memory import list_notes
 from financial_agent.store.routines import describe_routine, describe_total, list_routines
 from financial_agent.store.pending import PendingAction
@@ -196,7 +197,9 @@ class AgentSession:
             routine_hour=self._settings.routine_hour,
             timezone=self._settings.timezone,
         )
-        prompt = build_system_prompt(notes, routine_lines)
+        # La fecha queda fija mientras dura la sesión: alcanza para saber qué mes es "este mes".
+        today = utc_now().astimezone(ZoneInfo(self._settings.timezone)).date()
+        prompt = build_system_prompt(notes, routine_lines, today)
         options = build_options(self._settings, prompt, server)
         client = self._client_factory(options)
         self._client = client

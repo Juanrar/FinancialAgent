@@ -8,10 +8,16 @@ from financial_agent.agent.tools import (
     build_tools,
 )
 from fakes import FakeWallet
+from history_helpers import finished_transfer
 
 from financial_agent.fiwind.client import FiwindUnavailable, SessionExpired
 from financial_agent.fiwind.pages import Recipient
-from financial_agent.store.contacts import add_destination, create_contact, get_contact
+from financial_agent.store.contacts import (
+    add_destination,
+    create_contact,
+    get_contact,
+    set_verification,
+)
 from financial_agent.store import routines
 from financial_agent.store.memory import list_notes
 
@@ -32,7 +38,7 @@ def _text(result):
 
 
 def test_allowed_tools():
-    assert len(TOOL_NAMES) == 20
+    assert len(TOOL_NAMES) == 21
     assert all(n.startswith("mcp__fa__") for n in ALLOWED_TOOLS)
 
 
@@ -352,3 +358,66 @@ def test_turn_reset_clears_session_expired():
     turn = TurnState(session_expired=True)
     turn.reset()
     assert turn.session_expired is False
+
+
+def _history_dest(conn, name, alias):
+    c = create_contact(conn, name)
+    d = add_destination(conn, c.id, "alias", alias)
+    set_verification(conn, d.id, "Federico Pérez", _RECIPIENT.account, "Brubank")
+    return c, d
+
+
+async def test_listar_transferencias_by_contact_and_month(conn):
+    tools, _ = _tools(conn)
+    fede, fd = _history_dest(conn, "Fede", "fede.mp")
+    _, ad = _history_dest(conn, "Ana", "ana.mp")
+    text = "Transferencia de {} a Fede, alias fede.mp"
+    finished_transfer(conn, fd, datetime(2026, 10, 5, 15, tzinfo=UTC), text.format("$2.000"))
+    finished_transfer(conn, fd, datetime(2026, 10, 20, 15, tzinfo=UTC), text.format("$1.000"),
+                      "hecha_a_mano", amount=100000)
+    finished_transfer(conn, fd, datetime(2026, 10, 21, 15, tzinfo=UTC), text.format("$5.000"),
+                      "no_salio", "saldo insuficiente", amount=500000)
+    # 02:00 UTC del 1/11 es el 31/10 en Buenos Aires; 04:00 UTC ya es noviembre.
+    finished_transfer(conn, fd, datetime(2026, 11, 1, 2, tzinfo=UTC), text.format("$3.000"),
+                      amount=300000)
+    finished_transfer(conn, fd, datetime(2026, 11, 1, 4, tzinfo=UTC), text.format("$7.000"),
+                      amount=700000)
+    finished_transfer(conn, ad, datetime(2026, 10, 10, 15, tzinfo=UTC),
+                      "Transferencia de $9.000 a Ana, alias ana.mp", amount=900000)
+
+    result = await tools["listar_transferencias"].handler({"contacto_id": fede.id, "mes": "2026-10"})
+    assert _text(result) == (
+        "31/10/2026 Transferencia de $3.000 a Fede, alias fede.mp: enviada\n"
+        "21/10/2026 Transferencia de $5.000 a Fede, alias fede.mp: no salió (saldo insuficiente)\n"
+        "20/10/2026 Transferencia de $1.000 a Fede, alias fede.mp: hecha a mano\n"
+        "05/10/2026 Transferencia de $2.000 a Fede, alias fede.mp: enviada\n"
+        "Total enviado: $6.000"
+    )
+
+
+async def test_listar_transferencias_last_ten_without_month(conn):
+    tools, _ = _tools(conn)
+    _, d = _history_dest(conn, "Fede", "fede.mp")
+    for day in range(1, 13):
+        finished_transfer(conn, d, datetime(2026, 10, day, 15, tzinfo=UTC),
+                          f"Transferencia de $1 a Fede, día {day}", amount=100)
+    lines = _text(await tools["listar_transferencias"].handler({})).split("\n")
+    assert len(lines) == 11
+    assert lines[0] == "12/10/2026 Transferencia de $1 a Fede, día 12: enviada"
+    assert lines[9] == "03/10/2026 Transferencia de $1 a Fede, día 3: enviada"
+    assert lines[10] == "Total enviado: $10"
+
+
+async def test_listar_transferencias_bad_month(conn):
+    tools, _ = _tools(conn)
+    for month in ("octubre", "2026-13", "2026-1"):
+        result = await tools["listar_transferencias"].handler({"mes": month})
+        assert result.get("is_error") is True
+        assert _text(result) == "Error: El mes tiene que tener la forma AAAA-MM, por ejemplo 2026-10."
+
+
+async def test_listar_transferencias_empty_and_unknown_contact(conn):
+    tools, _ = _tools(conn)
+    assert _text(await tools["listar_transferencias"].handler({})) == "No hay transferencias."
+    result = await tools["listar_transferencias"].handler({"contacto_id": 99})
+    assert result.get("is_error") is True

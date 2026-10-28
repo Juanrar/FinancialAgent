@@ -15,7 +15,14 @@ from telegram.ext import (
 )
 
 from financial_agent.agent.session import AgentSession
-from financial_agent.bot import contacts_cmd, fiwind_session, memory_cmd, routines_cmd, transfer_flow
+from financial_agent.bot import (
+    contacts_cmd,
+    fiwind_session,
+    history_cmd,
+    memory_cmd,
+    routines_cmd,
+    transfer_flow,
+)
 from financial_agent.bot.awaiting import clear_awaiting
 from financial_agent.bot.chat import on_pending_callback, on_text
 from financial_agent.config import Settings
@@ -29,12 +36,13 @@ MSG_START = (
 MSG_ONLY_TEXT = "Por ahora solo leo texto."
 MSG_ERROR = "Algo falló, probá de nuevo."
 MSG_EDITED = "No proceso mensajes editados. Mandalo de nuevo."
-MSG_UNKNOWN_COMMAND = "No conozco ese comando. Tengo /memory, /contactos y /rutinas."
+MSG_UNKNOWN_COMMAND = "No conozco ese comando. Tengo /memory, /contactos, /rutinas y /historial."
 
 COMMANDS = [
     BotCommand("memory", "Ver y editar la memoria"),
     BotCommand("contactos", "Ver y editar contactos"),
     BotCommand("rutinas", "Ver y borrar rutinas"),
+    BotCommand("historial", "Ver las transferencias"),
 ]
 
 
@@ -101,6 +109,8 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CallbackQueryHandler(contacts_cmd.on_contacts_callback, pattern=r"^[cd]:"))
     application.add_handler(CommandHandler("rutinas", routines_cmd.on_rutinas))
     application.add_handler(CallbackQueryHandler(routines_cmd.on_routines_callback, pattern=r"^r:"))
+    application.add_handler(CommandHandler("historial", history_cmd.on_historial))
+    application.add_handler(CallbackQueryHandler(history_cmd.on_history_callback, pattern=r"^h:"))
     # Último de los comandos: los conocidos ya cortaron antes dentro del grupo 0.
     application.add_handler(MessageHandler(filters.COMMAND & new_message, unknown_command))
     application.add_handler(

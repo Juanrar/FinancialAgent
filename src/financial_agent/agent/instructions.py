@@ -1,3 +1,5 @@
+from datetime import date
+
 from financial_agent.store.memory import Note
 
 WRITING_RULES = """\
@@ -61,7 +63,8 @@ _TRANSFERS = (
     "Para mandar plata usá pedir_transferencia con el id del contacto y el monto en pesos con "
     "punto decimal, por ejemplo 2000 o 2000.50. Juan la confirma con los botones y el código "
     "la hace en Fiwind. Nunca digas que una transferencia salió si un aviso del sistema no lo "
-    "dice. Fiwind no transfiere a emails de Mercado Pago."
+    "dice. Fiwind no transfiere a emails de Mercado Pago. Para ver transferencias pasadas, "
+    "si salieron o cuánto se mandó, usá listar_transferencias."
 )
 
 _ROUTINES = (
@@ -76,16 +79,19 @@ _TONE = (
 )
 
 
-def build_system_prompt(notes: list[Note], routines: list[str] | None = None) -> str:
+def build_system_prompt(
+    notes: list[Note], routines: list[str] | None = None, today: date | None = None
+) -> str:
     if notes:
         lines = "\n".join(f"[id={n.id}] {n.text}" for n in notes)
         memory = f"Notas de memoria:\n{lines}"
     else:
         memory = "Notas de memoria:\nNo hay notas guardadas."
     routine_lines = "\n".join(routines) if routines else "No hay rutinas."
+    head = [_ROLE] if today is None else [_ROLE, f"Hoy es {today:%d/%m/%Y}."]
     return "\n\n".join(
         [
-            _ROLE,
+            *head,
             _CONTACTS_OR_MEMORY,
             _AMBIGUITY,
             _BUTTONS,

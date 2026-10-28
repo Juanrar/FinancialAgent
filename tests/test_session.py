@@ -145,6 +145,8 @@ async def test_open_passes_routines_to_prompt(conn, settings):
     prompt = factory.options[0].system_prompt
     assert f"[id={rid}] $30.000 a Tío Pepe los días 5" in prompt
     assert "$15.000 a Ana los días 10\nTotal por mes: $45.000" in prompt
+    today = datetime.now(ZoneInfo(settings.timezone))
+    assert f"Hoy es {today:%d/%m/%Y}." in prompt
 
 
 async def test_unexpected_tool_aborts(conn, settings):

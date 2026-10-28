@@ -1,12 +1,14 @@
+import re
 import sqlite3
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from claude_agent_sdk import McpSdkServerConfig, SdkMcpTool, create_sdk_mcp_server, tool
 
 from financial_agent.fiwind.client import FiwindClient, FiwindUnavailable, SessionExpired
-from financial_agent.money import parse_amount
+from financial_agent.money import format_amount, parse_amount
 from financial_agent.store import contacts, memory, pending, routines
 from financial_agent.store.contacts import Contact
 from financial_agent.store.db import NotFoundError, utc_now
@@ -42,6 +44,7 @@ TOOL_NAMES: tuple[str, ...] = (
     "editar_rutina",
     "borrar_rutina",
     "listar_rutinas",
+    "listar_transferencias",
 )
 
 ALLOWED_TOOLS: list[str] = [f"mcp__{SERVER_NAME}__{n}" for n in TOOL_NAMES]
@@ -119,6 +122,24 @@ _AMOUNT = {
     "type": "string",
     "description": "Pesos con punto decimal, por ejemplo 2000 o 2000.50",
 }
+
+_RECENT_TRANSFERS = 10
+_MOVED_MONEY = ("enviada", "hecha_a_mano")
+
+
+def _month_bounds(month: str, tz: str) -> tuple[datetime, datetime]:
+    """Principio del mes y del mes siguiente, en hora local."""
+    match = re.fullmatch(r"([0-9]{4})-([0-9]{2})", month.strip())
+    if match is None or not 1 <= int(match.group(2)) <= 12:
+        raise ValidationError("El mes tiene que tener la forma AAAA-MM, por ejemplo 2026-10.")
+    year, number = int(match.group(1)), int(match.group(2))
+    zone = ZoneInfo(tz)
+    since = datetime(year, number, 1, tzinfo=zone)
+    if number == 12:
+        until = datetime(year + 1, 1, 1, tzinfo=zone)
+    else:
+        until = datetime(year, number + 1, 1, tzinfo=zone)
+    return since, until
 
 
 def build_tools(
@@ -409,6 +430,41 @@ def build_tools(
         lines = [f"id={r.id} {routines.describe_routine(conn, r)}" for r in found]
         return _ok("\n".join([*lines, routines.describe_total(conn)]))
 
+    @tool(
+        "listar_transferencias",
+        "Lista transferencias terminadas con fecha y estado: enviada, no salió, sin confirmar "
+        "o hecha a mano. Con mes trae todas las de ese mes; sin mes, las últimas 10. "
+        "contacto_id filtra por contacto. Termina con el total enviado, que suma las enviadas "
+        "y las hechas a mano.",
+        _schema(
+            {
+                "contacto_id": {"type": "integer"},
+                "mes": {"type": "string", "description": "AAAA-MM, por ejemplo 2026-10"},
+            },
+            [],
+        ),
+    )
+    @_guard
+    async def listar_transferencias(args):
+        contact_id = args.get("contacto_id")
+        if contact_id is not None:
+            contacts.get_contact(conn, contact_id)
+        if args.get("mes") is None:
+            found = pending.list_transfers(conn, contact_id=contact_id)[:_RECENT_TRANSFERS]
+        else:
+            since, until = _month_bounds(args["mes"], timezone)
+            found = pending.list_transfers(conn, contact_id=contact_id, since=since, until=until)
+        if not found:
+            return _ok("No hay transferencias.")
+        zone = ZoneInfo(timezone)
+        lines = [
+            f"{a.resolved_at.astimezone(zone):%d/%m/%Y} {pending.agent_text(a)}: "
+            f"{pending.status_label(a)}"
+            for a in found
+        ]
+        sent = sum(a.payload["amount_cents"] for a in found if a.status in _MOVED_MONEY)
+        return _ok("\n".join([*lines, f"Total enviado: {format_amount(sent)}"]))
+
     return [
         buscar_contactos,
         listar_contactos,
@@ -430,6 +486,7 @@ def build_tools(
         editar_rutina,
         borrar_rutina,
         listar_rutinas,
+        listar_transferencias,
     ]
 
 
