@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock
 import pytest
 from telegram import Message, Update, User
 
+from fakes import FakeWallet
+
 from financial_agent.bot.application import (
     MSG_EDITED,
     MSG_UNKNOWN_COMMAND,
@@ -59,6 +61,20 @@ async def test_edited_text_is_not_processed(app, settings, replies):
     assert get_awaiting(context_like) is not None
     replies.assert_awaited_once_with(MSG_EDITED)
     assert MSG_EDITED == "No proceso mensajes editados. Mandalo de nuevo."
+
+
+async def test_fiwind_code_goes_to_wallet_not_agent(settings, conn, replies):
+    session = SimpleNamespace(send=AsyncMock(), add_context_note=lambda note: None)
+    wallet = FakeWallet()
+    application = build_application(settings, conn, session, wallet)
+    application._initialized = True
+    application.bot._bot_user = User(id=99, first_name="Bot", is_bot=True, username="fa_bot")
+    owner = settings.telegram_owner_id
+    set_awaiting(SimpleNamespace(user_data=application.user_data[owner]),
+                 Awaiting("fiwind_code", 0))
+    await application.process_update(_update(application, owner, "432802"))
+    assert wallet.calls == [("submit_code", "432802")]
+    session.send.assert_not_awaited()
 
 
 async def test_new_text_still_reaches_agent(app, settings, replies):

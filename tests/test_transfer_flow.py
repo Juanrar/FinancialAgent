@@ -129,12 +129,12 @@ async def test_answer_failure_in_manual_and_session_callbacks(conn):
     query.answer.side_effect = NetworkError("tarde")
     await on_manual_callback(_update(query), _ctx(conn, wallet))
     assert _texts(query)[-1].endswith("No se hizo.")
-    other = _query("f:done")
+    other = _query("f:login")
     other.answer.side_effect = NetworkError("tarde")
     ctx = _ctx(conn, wallet)
-    ctx.application.bot_data["wallet"] = SimpleNamespace(finish_login=AsyncMock(return_value=True))
+    ctx.application.bot_data["wallet"] = FakeWallet()
     await on_fiwind_callback(_update(other), ctx)
-    assert _texts(other) == ["Listo, la sesión de Fiwind está activa."]
+    assert _texts(other)[-1] == "Listo, la sesión de Fiwind está activa."
 
 
 async def test_unexpected_error_marks_unconfirmed(conn, monkeypatch, caplog):
@@ -208,7 +208,7 @@ async def test_expired_sends_session_notice(conn):
     await on_pending_callback(_update(query), ctx)
     call = ctx.bot.send_message.await_args
     assert call.args == (7, MSG_SESSION_EXPIRED)
-    assert call.kwargs["reply_markup"].inline_keyboard[0][0].callback_data == "f:open"
+    assert call.kwargs["reply_markup"].inline_keyboard[0][0].callback_data == "f:login"
     assert query.message.reply_text.await_args.args[0].startswith("Podés hacerla a mano")
 
 

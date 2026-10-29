@@ -2,7 +2,7 @@ import asyncio
 import time
 
 from financial_agent.fiwind.browser import BrowserCommandError
-from financial_agent.fiwind.client import Sent
+from financial_agent.fiwind.client import LoggedIn, Sent
 from financial_agent.fiwind.pages import Recipient
 
 
@@ -44,15 +44,18 @@ class FakeWallet:
     def __init__(self, available=True,
                  recipient=Recipient("Federico Pérez", "Brubank", "0000168300000000123459"),
                  lookup_error=None, outcome=Sent("En proceso"), balance=300,
-                 balance_error=None, login_ok=True,
-                 delay=0.0):
+                 balance_error=None, login_outcome=LoggedIn(), login_error=None,
+                 code_outcome=LoggedIn(), code_error=None, delay=0.0):
         self.available = available
         self.recipient = recipient
         self.lookup_error = lookup_error
         self.outcome = outcome
         self.balance = balance
         self.balance_error = balance_error
-        self.login_ok = login_ok
+        self.login_outcome = login_outcome
+        self.login_error = login_error
+        self.code_outcome = code_outcome
+        self.code_error = code_error
         self.delay = delay
         self.calls: list[tuple] = []
 
@@ -74,9 +77,14 @@ class FakeWallet:
             raise self.balance_error
         return self.balance
 
-    async def open_login_window(self):
-        self.calls.append(("open_login_window",))
+    async def start_login(self):
+        self.calls.append(("start_login",))
+        if self.login_error:
+            raise self.login_error
+        return self.login_outcome
 
-    async def finish_login(self):
-        self.calls.append(("finish_login",))
-        return self.login_ok
+    async def submit_code(self, code):
+        self.calls.append(("submit_code", code))
+        if self.code_error:
+            raise self.code_error
+        return self.code_outcome

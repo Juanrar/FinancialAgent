@@ -9,9 +9,10 @@ Los logs llevan solo operación, paso y clase del resultado.
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 
-from financial_agent.fiwind.browser import AgentBrowser
+from financial_agent.fiwind.browser import AgentBrowser, BrowserCommandError
 from financial_agent.fiwind.pages import (
     PageFormatError, Recipient, parse_confirm_dialog, parse_dashboard_balance,
     parse_form_balance, parse_lookup, parse_result_dialog, same_holder,
@@ -35,7 +36,19 @@ _RESULT_DIALOG_JS = ("[...document.querySelectorAll('[role=dialog]')].map(d => d
                      " const i = l.indexOf('Estado'); return i >= 0 && i < l.length - 1; })")
 RESULT_READY_JS = f"{_RESULT_DIALOG_JS} !== undefined"
 RESULT_TEXT_JS = f"{_RESULT_DIALOG_JS} ?? ''"
+EMAIL_INPUT = "input[placeholder='Tu email']"
+PASSWORD_INPUT = "input[type=password]"
+# Seis casillas de un dígito. Al completar la sexta, Fiwind valida solo.
+CODE_INPUT = "input[inputmode=numeric]"
+TYPING_PAUSE_MS = "4000"
+LOGIN_DONE_JS = ("location.pathname !== '/auth/login' || "
+                 "document.body.innerText.includes('incorrectos')")
+# Si Fiwind no acepta el código, la página no sale de /auth/ y el wait vence a los 30 s.
+CODE_DONE_JS = "!location.pathname.startsWith('/auth/')"
+AUTHORIZE_PATH = "/auth/authorize-device"
+LOGIN_TIMEOUT = 600
 
+STEP_LOGIN = "iniciar sesión"
 STEP_OPEN = "abrir Fiwind"
 STEP_SEARCH = "buscar el destino"
 STEP_BALANCE = "leer el saldo"
@@ -45,7 +58,8 @@ STEP_SEND = "enviar"
 STEP_RESULT = "leer el resultado"
 
 NO_BROWSER = "agent-browser no está instalado"
-LOGIN_OPEN = "la ventana de login está abierta"
+NO_CREDENTIALS = "faltan FIWIND_EMAIL o FIWIND_PASSWORD en el .env"
+LOGIN_OPEN = "hay un inicio de sesión esperando el código"
 
 
 class SessionExpired(Exception):
@@ -104,6 +118,41 @@ class Expired:
 WithdrawalOutcome = Sent | NotSent | Mismatch | Insufficient | Unconfirmed | Expired
 
 
+@dataclass(frozen=True)
+class Credentials:
+    email: str
+    password: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class LoggedIn:
+    pass
+
+
+@dataclass(frozen=True)
+class CodeRequired:
+    pass
+
+
+@dataclass(frozen=True)
+class BadCredentials:
+    pass
+
+
+@dataclass(frozen=True)
+class CodeRejected:
+    pass
+
+
+@dataclass(frozen=True)
+class LoginExpired:
+    pass
+
+
+LoginOutcome = LoggedIn | CodeRequired | BadCredentials
+CodeOutcome = LoggedIn | CodeRejected | LoginExpired
+
+
 def _reason(exc: Exception) -> str:
     if isinstance(exc, PageFormatError):
         return "la página de Fiwind tiene un formato inesperado"
@@ -111,10 +160,15 @@ def _reason(exc: Exception) -> str:
 
 
 class FiwindClient:
-    def __init__(self, browser: AgentBrowser | None):
+    def __init__(self, browser: AgentBrowser | None, credentials: Credentials | None = None,
+                 clock=time.monotonic):
         self._browser = browser
+        self._credentials = credentials
+        self._clock = clock
         self._lock = asyncio.Lock()
+        # Login esperando el código del mail: el navegador queda abierto en esa pantalla.
         self._login_open = False
+        self._login_started = 0.0
         self._step = STEP_OPEN
 
     @property
@@ -125,13 +179,14 @@ class FiwindClient:
 
     async def lookup(self, destination: str) -> Recipient | None:
         async with self._lock:
-            self._require_ready()
+            await self._require_ready()
             result = await self._guarded("lookup", self._lookup_sync, destination)
             logger.info("fiwind lookup: resultado=%s", "encontrado" if result else "no encontrado")
             return result
 
     async def withdraw(self, order: WithdrawalOrder) -> WithdrawalOutcome:
         async with self._lock:
+            await self._drop_stale_login()
             if self._browser is None:
                 return NotSent(STEP_OPEN, NO_BROWSER)
             if self._login_open:
@@ -150,51 +205,57 @@ class FiwindClient:
 
     async def read_balance(self) -> int | None:
         async with self._lock:
-            self._require_ready()
+            await self._require_ready()
             return await self._guarded("read_balance", self._read_balance_sync)
 
-    async def open_login_window(self) -> None:
+    async def start_login(self) -> LoginOutcome:
+        """Carga email y contraseña. Si Fiwind pide el código, deja el navegador en esa pantalla."""
         async with self._lock:
             if self._browser is None:
-                raise FiwindUnavailable(STEP_OPEN, NO_BROWSER)
-            browser = self._browser
-
-            def work() -> None:
-                browser.close()
-                browser.open(LOGIN_URL, headed=True)
-
-            try:
-                await asyncio.to_thread(work)
-            except Exception as exc:
-                await asyncio.to_thread(browser.close)
-                raise FiwindUnavailable(STEP_OPEN, _reason(exc)) from exc
-            self._login_open = True
-            logger.info("fiwind open_login_window: resultado=abierta")
-
-    async def finish_login(self) -> bool:
-        async with self._lock:
-            if self._browser is None or not self._login_open:
-                return False
-            browser = self._browser
-
-            def work() -> bool:
-                try:
-                    return "/auth/" not in browser.run("get", "url")
-                finally:
-                    browser.close()
-
-            try:
-                ok = await asyncio.to_thread(work)
-            except Exception as exc:
-                logger.warning("fiwind finish_login: resultado=%s", type(exc).__name__)
-                ok = False
+                raise FiwindUnavailable(STEP_LOGIN, NO_BROWSER)
+            if self._credentials is None:
+                raise FiwindUnavailable(STEP_LOGIN, NO_CREDENTIALS)
             self._login_open = False
-            logger.info("fiwind finish_login: resultado=%s", "sesión" if ok else "sin sesión")
-            return ok
+            try:
+                outcome = await asyncio.to_thread(self._start_login_sync)
+            except Exception as exc:
+                await asyncio.to_thread(self._browser.close)
+                logger.warning("fiwind start_login: resultado=%s", type(exc).__name__)
+                raise FiwindUnavailable(STEP_LOGIN, _reason(exc)) from exc
+            if isinstance(outcome, CodeRequired):
+                self._login_open = True
+                self._login_started = self._clock()
+            else:
+                await asyncio.to_thread(self._browser.close)
+            logger.info("fiwind start_login: resultado=%s", type(outcome).__name__)
+            return outcome
+
+    async def submit_code(self, code: str) -> CodeOutcome:
+        async with self._lock:
+            await self._drop_stale_login()
+            if self._browser is None or not self._login_open:
+                return LoginExpired()
+            try:
+                outcome = await asyncio.to_thread(self._submit_code_sync, code)
+            except Exception as exc:
+                logger.warning("fiwind submit_code: resultado=%s", type(exc).__name__)
+                raise FiwindUnavailable(STEP_LOGIN, _reason(exc)) from exc
+            finally:
+                self._login_open = False
+                await asyncio.to_thread(self._browser.close)
+            logger.info("fiwind submit_code: resultado=%s", type(outcome).__name__)
+            return outcome
 
     # --- soporte ---
 
-    def _require_ready(self) -> None:
+    async def _drop_stale_login(self) -> None:
+        if self._login_open and self._clock() - self._login_started > LOGIN_TIMEOUT:
+            self._login_open = False
+            await asyncio.to_thread(self._browser.close)
+            logger.info("fiwind login: resultado=vencido sin código")
+
+    async def _require_ready(self) -> None:
+        await self._drop_stale_login()
         if self._browser is None:
             raise FiwindUnavailable(STEP_OPEN, NO_BROWSER)
         if self._login_open:
@@ -244,6 +305,39 @@ class FiwindClient:
             raise FiwindUnavailable(self._step, _reason(exc)) from exc
 
     # --- parte sincrónica (corre en un hilo) ---
+
+    def _start_login_sync(self) -> LoginOutcome:
+        browser = self._browser
+        browser.close()
+        browser.open(LOGIN_URL)
+        browser.run("wait", "--load", "networkidle")
+        if "/auth/" not in browser.run("get", "url"):
+            return LoggedIn()
+        # Tecla por tecla: con fill, Fiwind responde que el usuario o la contraseña
+        # son incorrectos aunque el valor quede bien cargado.
+        browser.run("type", EMAIL_INPUT, self._credentials.email)
+        browser.run("wait", TYPING_PAUSE_MS)
+        browser.run("type", PASSWORD_INPUT, self._credentials.password)
+        browser.run("find", "role", "button", "click", "--name", "Ingresar")
+        browser.run("wait", "--fn", LOGIN_DONE_JS)
+        url = browser.run("get", "url")
+        if AUTHORIZE_PATH in url:
+            return CodeRequired()
+        if "/auth/login" in url:
+            return BadCredentials()
+        if "/auth/" in url:
+            raise PageFormatError("pantalla de login desconocida")
+        return LoggedIn()
+
+    def _submit_code_sync(self, code: str) -> CodeOutcome:
+        browser = self._browser
+        browser.run("click", CODE_INPUT)
+        browser.run("keyboard", "type", code)
+        try:
+            browser.run("wait", "--fn", CODE_DONE_JS)
+        except BrowserCommandError:
+            pass  # Se decide por la URL.
+        return CodeRejected() if "/auth/" in browser.run("get", "url") else LoggedIn()
 
     def _open_panel(self) -> None:
         browser = self._browser

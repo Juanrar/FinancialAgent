@@ -5,10 +5,12 @@ import pytest
 
 from fakes import FakeBrowser
 from financial_agent.fiwind.client import (
-    AMOUNT_INPUT, DESTINATION_INPUT, DIALOG, LOGIN_URL, PANEL_URL, RESULT_READY_JS,
-    RESULT_TEXT_JS, STEP_AMOUNT, STEP_CONFIRM, STEP_OPEN, STEP_RESULT, STEP_SEARCH, STEP_SEND,
-    WITHDRAWAL_URL, Expired, FiwindClient, FiwindUnavailable, Insufficient, Mismatch, NotSent,
-    SessionExpired, Sent, Unconfirmed, WithdrawalOrder,
+    AMOUNT_INPUT, CODE_DONE_JS, CODE_INPUT, DESTINATION_INPUT, DIALOG, EMAIL_INPUT, LOGIN_URL,
+    PANEL_URL, PASSWORD_INPUT, RESULT_READY_JS, RESULT_TEXT_JS, STEP_AMOUNT, STEP_CONFIRM,
+    STEP_LOGIN, STEP_OPEN, STEP_RESULT, STEP_SEARCH, STEP_SEND, WITHDRAWAL_URL, BadCredentials,
+    CodeRejected, CodeRequired, Credentials, Expired, FiwindClient, FiwindUnavailable,
+    Insufficient, LoggedIn, LoginExpired, Mismatch, NotSent, SessionExpired, Sent, Unconfirmed,
+    WithdrawalOrder,
 )
 from financial_agent.fiwind.pages import Recipient
 from fiwind_samples import (
@@ -163,6 +165,9 @@ async def test_without_browser():
     with pytest.raises(FiwindUnavailable) as info:
         await client.read_balance()
     assert info.value.reason == "agent-browser no está instalado"
+    with pytest.raises(FiwindUnavailable) as info:
+        await client.start_login()
+    assert info.value.reason == "agent-browser no está instalado"
 
 
 async def test_operations_are_serialized():
@@ -186,23 +191,136 @@ async def test_session_expired_in_panel():
         await client.read_balance()
 
 
-async def test_login_window():
-    client, browser = _client({("get", "url"): PANEL_URL})
-    await client.open_login_window()
-    assert ("open", LOGIN_URL, True) in browser.calls
-    with pytest.raises(FiwindUnavailable):
-        await client.lookup("x.y.z")
-    assert isinstance(await client.withdraw(ORDER), NotSent)
-    assert await client.finish_login() is True
+EMAIL, PASSWORD, CODE = "juan@mail.com", "clave-123", "432802"
+AUTHORIZE_URL = "https://panel.fiwind.io/auth/authorize-device"
+INGRESAR = ("find", "role", "button", "click", "--name", "Ingresar")
+TYPE_EMAIL = ("type", EMAIL_INPUT, EMAIL)
+TYPE_PASSWORD = ("type", PASSWORD_INPUT, PASSWORD)
+WAITING_CODE = "hay un inicio de sesión esperando el código"
+
+
+def _login_client(urls, responses=None, clock=None):
+    base = {("get", "url"): list(urls), ("get", "text", "form"): LOOKUP_FOUND}
+    browser = FakeBrowser(base | (responses or {}))
+    client = FiwindClient(browser, Credentials(EMAIL, PASSWORD), clock=clock or (lambda: 0))
+    return client, browser
+
+
+async def test_login_known_device():
+    client, browser = _login_client([LOGIN_URL, PANEL_URL])
+    assert await client.start_login() == LoggedIn()
+    assert ("open", LOGIN_URL, None) in browser.calls
+    steps = [browser.calls.index(c) for c in (TYPE_EMAIL, ("wait", "4000"), TYPE_PASSWORD, INGRESAR)]
+    assert steps == sorted(steps)
+    # Fiwind rechaza el email y la contraseña pegados con fill.
+    assert not [c for c in browser.calls if c[0] == "fill"]
     assert browser.calls[-1] == ("close",)
 
 
-async def test_read_balance_raises_on_login_window_and_browser_error():
-    client, _ = _client({("get", "url"): PANEL_URL})
-    await client.open_login_window()
+async def test_login_with_session_already_active():
+    client, browser = _login_client([PANEL_URL])
+    assert await client.start_login() == LoggedIn()
+    assert TYPE_EMAIL not in browser.calls
+    assert browser.calls[-1] == ("close",)
+
+
+async def test_login_bad_credentials():
+    client, browser = _login_client([LOGIN_URL, LOGIN_URL])
+    assert await client.start_login() == BadCredentials()
+    assert browser.calls[-1] == ("close",)
+    assert await client.lookup("ana.alias") == Recipient(HOLDER, BANK, CVU)
+
+
+async def test_login_code_required_blocks_other_operations():
+    client, browser = _login_client([LOGIN_URL, AUTHORIZE_URL])
+    assert await client.start_login() == CodeRequired()
+    assert browser.calls[-1] != ("close",)
+    with pytest.raises(FiwindUnavailable) as info:
+        await client.lookup("ana.alias")
+    assert (info.value.step, info.value.reason) == (STEP_OPEN, WAITING_CODE)
+    assert await client.withdraw(ORDER) == NotSent(STEP_OPEN, WAITING_CODE)
+
+
+async def test_submit_code_logs_in():
+    client, browser = _login_client([LOGIN_URL, AUTHORIZE_URL, PANEL_URL])
+    await client.start_login()
+    assert await client.submit_code(CODE) == LoggedIn()
+    steps = [browser.calls.index(c) for c in (("click", CODE_INPUT), ("keyboard", "type", CODE))]
+    assert steps == sorted(steps)
+    assert browser.calls[-1] == ("close",)
+    assert await client.lookup("ana.alias") == Recipient(HOLDER, BANK, CVU)
+
+
+async def test_submit_code_rejected():
+    client, browser = _login_client([LOGIN_URL, AUTHORIZE_URL, AUTHORIZE_URL],
+                                    {("wait", "--fn", CODE_DONE_JS): RuntimeError()})
+    await client.start_login()
+    assert await client.submit_code(CODE) == CodeRejected()
+    assert browser.calls[-1] == ("close",)
+    assert await client.lookup("ana.alias") == Recipient(HOLDER, BANK, CVU)
+
+
+async def test_submit_code_without_login():
+    client, browser = _login_client([])
+    assert await client.submit_code(CODE) == LoginExpired()
+    assert ("keyboard", "type", CODE) not in browser.calls
+
+
+async def test_login_waiting_code_expires_after_ten_minutes():
+    now = [0]
+    client, browser = _login_client([LOGIN_URL, AUTHORIZE_URL], clock=lambda: now[0])
+    await client.start_login()
+    now[0] = 599
+    with pytest.raises(FiwindUnavailable):
+        await client.lookup("ana.alias")
+    now[0] = 601
+    assert await client.lookup("ana.alias") == Recipient(HOLDER, BANK, CVU)
+    assert await client.submit_code(CODE) == LoginExpired()
+    assert ("keyboard", "type", CODE) not in browser.calls
+
+
+async def test_login_without_credentials():
+    browser = FakeBrowser()
+    with pytest.raises(FiwindUnavailable) as info:
+        await FiwindClient(browser).start_login()
+    assert (info.value.step, info.value.reason) == (
+        STEP_LOGIN, "faltan FIWIND_EMAIL o FIWIND_PASSWORD en el .env")
+    assert browser.calls == []
+
+
+async def test_login_browser_error():
+    client, browser = _login_client([LOGIN_URL], {("type",): RuntimeError()})
+    with pytest.raises(FiwindUnavailable) as info:
+        await client.start_login()
+    assert (info.value.step, info.value.reason) == (STEP_LOGIN, "falló el navegador")
+    assert browser.calls[-1] == ("close",)
+    assert await client.lookup("ana.alias") == Recipient(HOLDER, BANK, CVU)
+
+
+async def test_login_unknown_screen():
+    client, browser = _login_client([LOGIN_URL, "https://panel.fiwind.io/auth/otra"])
+    with pytest.raises(FiwindUnavailable) as info:
+        await client.start_login()
+    assert info.value.reason == "la página de Fiwind tiene un formato inesperado"
+    assert browser.calls[-1] == ("close",)
+
+
+async def test_submit_code_browser_error():
+    client, browser = _login_client([LOGIN_URL, AUTHORIZE_URL], {("keyboard",): RuntimeError()})
+    await client.start_login()
+    with pytest.raises(FiwindUnavailable) as info:
+        await client.submit_code(CODE)
+    assert info.value.step == STEP_LOGIN
+    assert browser.calls[-1] == ("close",)
+    assert await client.lookup("ana.alias") == Recipient(HOLDER, BANK, CVU)
+
+
+async def test_read_balance_raises_on_login_waiting_code_and_browser_error():
+    client, _ = _login_client([LOGIN_URL, AUTHORIZE_URL])
+    await client.start_login()
     with pytest.raises(FiwindUnavailable) as info:
         await client.read_balance()
-    assert (info.value.step, info.value.reason) == (STEP_OPEN, "la ventana de login está abierta")
+    assert (info.value.step, info.value.reason) == (STEP_OPEN, WAITING_CODE)
     client, _ = _client({("wait", "--load"): RuntimeError()})
     with pytest.raises(FiwindUnavailable) as info:
         await client.read_balance()

@@ -14,6 +14,7 @@ class Awaiting:
         "contact_nicknames",
         "destination_add",
         "destination_value",
+        "fiwind_code",
     ]
     target_id: int
 

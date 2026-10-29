@@ -283,7 +283,7 @@ async def test_on_text_sends_session_notice(conn):
     await on_text(_text_update(), context)
     call = context.bot.send_message.await_args
     assert call.args == (1, MSG_SESSION_EXPIRED)
-    assert call.kwargs["reply_markup"].inline_keyboard[0][0].callback_data == "f:open"
+    assert call.kwargs["reply_markup"].inline_keyboard[0][0].callback_data == "f:login"
 
 
 async def test_on_text_error_path_sends_session_notice(conn):

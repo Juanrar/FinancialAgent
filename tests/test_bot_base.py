@@ -58,6 +58,7 @@ def test_build_application(settings, conn):
         "contact_nicknames",
         "destination_add",
         "destination_value",
+        "fiwind_code",
     }
     assert application.concurrent_updates == 1
     assert application.bot_data["wallet"].available is False

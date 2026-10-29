@@ -140,6 +140,7 @@ def build_application(
         "contact_nicknames": contacts_cmd.handle_awaiting,
         "destination_add": contacts_cmd.handle_awaiting,
         "destination_value": contacts_cmd.handle_awaiting,
+        "fiwind_code": fiwind_session.handle_awaiting,
     }
     register_handlers(application)
     return application
