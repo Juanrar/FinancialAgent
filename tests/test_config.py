@@ -55,6 +55,17 @@ def test_fiwind_overrides(tmp_path):
     assert s.agent_browser_bin == "C:/npm/agent-browser.CMD" and s.routine_hour == 8
 
 
+def test_fiwind_credentials():
+    s = load_settings(REQUIRED | {"FIWIND_EMAIL": " juan@mail.com ", "FIWIND_PASSWORD": "clave-123"})
+    assert (s.fiwind_email, s.fiwind_password) == ("juan@mail.com", "clave-123")
+    assert "clave-123" not in repr(s)
+
+
+def test_fiwind_credentials_missing():
+    s = load_settings(REQUIRED)
+    assert s.fiwind_email is None and s.fiwind_password is None
+
+
 @pytest.mark.parametrize("value", ["1", "true", "TRUE", "Si", "si", "sí", "SÍ", "Sí"])
 def test_fiwind_headed_truthy_values(value):
     assert load_settings(REQUIRED | {"FIWIND_HEADED": value}).fiwind_headed is True

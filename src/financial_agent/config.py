@@ -24,6 +24,8 @@ class Settings:
     fiwind_headed: bool
     agent_browser_bin: str | None
     routine_hour: int
+    fiwind_email: str | None
+    fiwind_password: str | None = field(repr=False)
 
 
 def _required(environ: Mapping[str, str], name: str) -> str:
@@ -81,4 +83,6 @@ def load_settings(environ: Mapping[str, str] = os.environ) -> Settings:
         fiwind_headed=environ.get("FIWIND_HEADED", "").strip().lower() in ("1", "true", "si", "sí"),
         agent_browser_bin=environ.get("AGENT_BROWSER_BIN", "").strip() or None,
         routine_hour=_routine_hour(environ),
+        fiwind_email=environ.get("FIWIND_EMAIL", "").strip() or None,
+        fiwind_password=environ.get("FIWIND_PASSWORD", "").strip() or None,
     )
