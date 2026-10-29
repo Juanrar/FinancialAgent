@@ -64,7 +64,8 @@ _TRANSFERS = (
     "punto decimal, por ejemplo 2000 o 2000.50. Juan la confirma con los botones y el código "
     "la hace en Fiwind. Nunca digas que una transferencia salió si un aviso del sistema no lo "
     "dice. Fiwind no transfiere a emails de Mercado Pago. Para ver transferencias pasadas, "
-    "si salieron o cuánto se mandó, usá listar_transferencias."
+    "si salieron o cuánto se mandó, usá listar_transferencias. Para el saldo de Fiwind, "
+    "usá ver_saldo."
 )
 
 _ROUTINES = (

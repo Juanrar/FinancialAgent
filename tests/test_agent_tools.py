@@ -38,7 +38,7 @@ def _text(result):
 
 
 def test_allowed_tools():
-    assert len(TOOL_NAMES) == 21
+    assert len(TOOL_NAMES) == 22
     assert all(n.startswith("mcp__fa__") for n in ALLOWED_TOOLS)
 
 
@@ -421,3 +421,23 @@ async def test_listar_transferencias_empty_and_unknown_contact(conn):
     assert _text(await tools["listar_transferencias"].handler({})) == "No hay transferencias."
     result = await tools["listar_transferencias"].handler({"contacto_id": 99})
     assert result.get("is_error") is True
+
+
+async def test_ver_saldo(conn):
+    tools, turn = _tools(conn, FakeWallet(balance=150050))
+    assert _text(await tools["ver_saldo"].handler({})) == "Saldo disponible en Fiwind: $1.500,50"
+    assert turn.session_expired is False
+
+
+async def test_ver_saldo_session_expired(conn):
+    tools, turn = _tools(conn, FakeWallet(balance_error=SessionExpired("abrir Fiwind")))
+    result = await tools["ver_saldo"].handler({})
+    assert result["is_error"] is True and "venció" in _text(result)
+    assert turn.session_expired is True
+
+
+async def test_ver_saldo_not_shown(conn):
+    tools, _ = _tools(conn, FakeWallet(balance=None))
+    result = await tools["ver_saldo"].handler({})
+    assert result["is_error"] is True
+    assert _text(result) == "Error: Fiwind no mostró el saldo."

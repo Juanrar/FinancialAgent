@@ -45,6 +45,7 @@ TOOL_NAMES: tuple[str, ...] = (
     "borrar_rutina",
     "listar_rutinas",
     "listar_transferencias",
+    "ver_saldo",
 )
 
 ALLOWED_TOOLS: list[str] = [f"mcp__{SERVER_NAME}__{n}" for n in TOOL_NAMES]
@@ -465,6 +466,14 @@ def build_tools(
         sent = sum(a.payload["amount_cents"] for a in found if a.status in _MOVED_MONEY)
         return _ok("\n".join([*lines, f"Total enviado: {format_amount(sent)}"]))
 
+    @tool("ver_saldo", "Lee en Fiwind el saldo disponible en pesos.", {})
+    @_guard
+    async def ver_saldo(args):
+        balance = await wallet.read_balance()
+        if balance is None:
+            return _error("Fiwind no mostró el saldo.")
+        return _ok(f"Saldo disponible en Fiwind: {format_amount(balance)}")
+
     return [
         buscar_contactos,
         listar_contactos,
@@ -487,6 +496,7 @@ def build_tools(
         borrar_rutina,
         listar_rutinas,
         listar_transferencias,
+        ver_saldo,
     ]
 
 
