@@ -8,7 +8,7 @@ from financial_agent.agent.session import AgentSession
 from financial_agent.bot.application import build_application, start_bot, stop_bot
 from financial_agent.config import Settings, load_settings
 from financial_agent.fiwind.browser import AgentBrowser, find_binary
-from financial_agent.fiwind.client import FiwindClient
+from financial_agent.fiwind.client import Credentials, FiwindClient
 from financial_agent.logs import setup_logging
 from financial_agent.scheduler import Scheduler
 from financial_agent.store.db import connect, migrate
@@ -21,7 +21,10 @@ def create_app(settings: Settings | None = None, with_bot: bool = True) -> FastA
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         active = settings or load_settings()
-        setup_logging(active.log_level, [active.telegram_bot_token, active.claude_oauth_token])
+        setup_logging(
+            active.log_level,
+            [active.telegram_bot_token, active.claude_oauth_token, active.fiwind_password],
+        )
         conn = connect(active.db_path)
         try:
             migrate(conn)
@@ -37,7 +40,10 @@ def create_app(settings: Settings | None = None, with_bot: bool = True) -> FastA
                 logger.warning(
                     "agent-browser no está instalado: las transferencias van por el camino manual"
                 )
-            wallet = FiwindClient(browser)
+            credentials = None
+            if active.fiwind_email and active.fiwind_password:
+                credentials = Credentials(active.fiwind_email, active.fiwind_password)
+            wallet = FiwindClient(browser, credentials)
             session = AgentSession(active, conn, wallet=wallet)
             for action in interrupted:
                 session.add_context_note(

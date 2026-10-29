@@ -27,6 +27,42 @@ def test_app_starts_without_agent_browser(settings, monkeypatch):
         assert client.get("/health").status_code == 200
 
 
+def _record_wallets(monkeypatch):
+    from financial_agent.fiwind.client import FiwindClient
+
+    calls = []
+
+    def make_wallet(*args, **kwargs):
+        calls.append(args)
+        return FiwindClient(*args, **kwargs)
+
+    monkeypatch.setattr("financial_agent.app.find_binary", lambda configured: "agent-browser")
+    monkeypatch.setattr("financial_agent.app.FiwindClient", make_wallet)
+    return calls
+
+
+def test_app_passes_fiwind_credentials_and_hides_password(settings, monkeypatch, capsys):
+    from dataclasses import replace
+
+    from financial_agent.fiwind.client import Credentials
+
+    calls = _record_wallets(monkeypatch)
+    active = replace(settings, fiwind_email="juan@mail.com", fiwind_password="clave-123")
+    with TestClient(create_app(active, with_bot=False)):
+        logging.getLogger("prueba").warning("falló con clave-123")
+    assert calls[0][1] == Credentials("juan@mail.com", "clave-123")
+    assert "clave-123" not in capsys.readouterr().out
+
+
+def test_app_without_fiwind_password_has_no_credentials(settings, monkeypatch):
+    from dataclasses import replace
+
+    calls = _record_wallets(monkeypatch)
+    with TestClient(create_app(replace(settings, fiwind_email="juan@mail.com"), with_bot=False)):
+        pass
+    assert calls[0][1] is None
+
+
 def test_app_warns_when_configured_binary_is_missing(settings, tmp_path, capsys):
     from dataclasses import replace
 
