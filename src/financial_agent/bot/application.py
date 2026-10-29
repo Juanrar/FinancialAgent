@@ -16,6 +16,7 @@ from telegram.ext import (
 
 from financial_agent.agent.session import AgentSession
 from financial_agent.bot import (
+    balance_cmd,
     contacts_cmd,
     fiwind_session,
     history_cmd,
@@ -36,9 +37,12 @@ MSG_START = (
 MSG_ONLY_TEXT = "Por ahora solo leo texto."
 MSG_ERROR = "Algo falló, probá de nuevo."
 MSG_EDITED = "No proceso mensajes editados. Mandalo de nuevo."
-MSG_UNKNOWN_COMMAND = "No conozco ese comando. Tengo /memory, /contactos, /rutinas y /historial."
+MSG_UNKNOWN_COMMAND = (
+    "No conozco ese comando. Tengo /saldo, /memory, /contactos, /rutinas y /historial."
+)
 
 COMMANDS = [
+    BotCommand("saldo", "Ver el saldo de Fiwind"),
     BotCommand("memory", "Ver y editar la memoria"),
     BotCommand("contactos", "Ver y editar contactos"),
     BotCommand("rutinas", "Ver y borrar rutinas"),
@@ -103,6 +107,7 @@ def register_handlers(application: Application) -> None:
     # Editar un mensaje viejo no debe volver a correr el agente ni completar un Awaiting.
     application.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE, edited_message))
     application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("saldo", balance_cmd.on_saldo))
     application.add_handler(CommandHandler("memory", memory_cmd.on_memory))
     application.add_handler(CallbackQueryHandler(memory_cmd.on_memory_callback, pattern=r"^m:"))
     application.add_handler(CommandHandler("contactos", contacts_cmd.on_contacts))
