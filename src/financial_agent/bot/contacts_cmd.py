@@ -3,7 +3,6 @@ from telegram.ext import ContextTypes
 
 from financial_agent.bot.awaiting import Awaiting, clear_awaiting, set_awaiting
 from financial_agent.bot.callback_data import make_callback, parse_callback
-from financial_agent.bot.fiwind_session import send_session_expired
 from financial_agent.fiwind.client import FiwindUnavailable, SessionExpired
 from financial_agent.store import contacts as store
 from financial_agent.store.contacts import Contact, Destination
@@ -203,7 +202,7 @@ async def _apply_awaiting(
 
 
 async def _verify_new_destination(
-    context: ContextTypes.DEFAULT_TYPE, chat_id: int, destination: Destination
+    context: ContextTypes.DEFAULT_TYPE, destination: Destination
 ) -> str:
     """Verifica el destino en Fiwind y devuelve el texto para Juan."""
     wallet = context.application.bot_data["wallet"]
@@ -212,7 +211,6 @@ async def _verify_new_destination(
     except ValidationError as error:
         return f"Sin verificar: {error}"
     except SessionExpired:
-        await send_session_expired(context.bot, chat_id)
         return "Sin verificar: la sesión de Fiwind venció."
     except FiwindUnavailable as error:
         return f"Sin verificar: {error.reason}"
@@ -227,9 +225,7 @@ async def handle_awaiting(
         contact_id, new_destination = await _apply_awaiting(context, awaiting, message.text)
         verification = None
         if new_destination is not None and "wallet" in context.application.bot_data:
-            verification = await _verify_new_destination(
-                context, update.effective_chat.id, new_destination
-            )
+            verification = await _verify_new_destination(context, new_destination)
         rendered = _render_contact(context, contact_id)
     except ValidationError as error:
         await message.reply_text(str(error))

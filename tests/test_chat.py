@@ -100,7 +100,7 @@ async def test_on_text_empty_reply_with_pending_skips_text(conn):
 
 async def test_on_text_agent_error_sends_user_message(caplog):
     session = SimpleNamespace(
-        send=AsyncMock(side_effect=AgentError("No pude hablar con Claude.")), turn=SimpleNamespace(session_expired=False)
+        send=AsyncMock(side_effect=AgentError("No pude hablar con Claude."))
     )
     update = _text_update()
     with caplog.at_level(logging.DEBUG):
@@ -113,7 +113,7 @@ async def test_on_text_agent_error_sends_pending_with_buttons(conn):
     contact = contacts.create_contact(conn, "Fede")
     action = create_action(conn, "delete_contact", {"contact_id": contact.id})
     error = AgentError("Corté.", pending=[action])
-    session = SimpleNamespace(send=AsyncMock(side_effect=error), turn=SimpleNamespace(session_expired=False))
+    session = SimpleNamespace(send=AsyncMock(side_effect=error))
     update = _text_update()
     await on_text(update, _context(session, conn))
     calls = update.effective_message.reply_text.await_args_list
@@ -229,7 +229,7 @@ async def test_on_text_typing_failure_keeps_agent_error_message():
         await asyncio.sleep(0.01)
         raise AgentError("No pude hablar con Claude.")
 
-    context = _context(SimpleNamespace(send=failing, turn=SimpleNamespace(session_expired=False)))
+    context = _context(SimpleNamespace(send=failing))
     context.bot.send_chat_action = AsyncMock(side_effect=RuntimeError("telegram"))
     update = _text_update()
     await on_text(update, context)
@@ -271,29 +271,3 @@ async def test_own_message_has_no_prefix(conn):
 
     await on_text(_text_update("hola"), _context(SimpleNamespace(send=send), conn))
     assert sent == ["hola"]
-
-
-async def test_on_text_sends_session_notice(conn):
-    from financial_agent.bot.fiwind_session import MSG_SESSION_EXPIRED
-
-    reply = AgentReply("no pude", [], session_expired=True)
-    session = SimpleNamespace(send=AsyncMock(return_value=reply))
-    context = _context(session, conn)
-    context.bot.send_message = AsyncMock()
-    await on_text(_text_update(), context)
-    call = context.bot.send_message.await_args
-    assert call.args == (1, MSG_SESSION_EXPIRED)
-    assert call.kwargs["reply_markup"].inline_keyboard[0][0].callback_data == "f:login"
-
-
-async def test_on_text_error_path_sends_session_notice(conn):
-    from financial_agent.bot.fiwind_session import MSG_SESSION_EXPIRED
-
-    session = SimpleNamespace(
-        send=AsyncMock(side_effect=AgentError("falló", [])),
-        turn=SimpleNamespace(session_expired=True),
-    )
-    context = _context(session, conn)
-    context.bot.send_message = AsyncMock()
-    await on_text(_text_update(), context)
-    assert context.bot.send_message.await_args.args == (1, MSG_SESSION_EXPIRED)

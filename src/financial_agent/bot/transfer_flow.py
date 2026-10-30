@@ -5,7 +5,6 @@ from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
 from financial_agent.bot.callback_data import make_callback, parse_callback, safe_answer
-from financial_agent.bot.fiwind_session import send_session_expired
 from financial_agent.store.pending import (
     agent_text,
     claim_transfer,
@@ -111,8 +110,6 @@ async def confirm_transfer(query, context: ContextTypes.DEFAULT_TYPE, action_id:
                 report.follow_up.description, reply_markup=pending_keyboard(report.follow_up.id)
             ),
         )
-    if report.session_expired:
-        await _guarded("aviso_sesion", send_session_expired(context.bot, query.message.chat_id))
 
 
 async def on_manual_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -118,17 +118,6 @@ async def test_reply_with_notices(conn, settings):
     assert fake.connected and fake.queries == ["Fede es mi hermano"]
 
 
-async def test_reply_flags_session_expired(conn, settings):
-    def expire(s):
-        s.turn.session_expired = True
-
-    session, _ = make_session(conn, settings, [INIT_OK, result("Listo")], on_query=expire)
-    reply = await session.send("hola")
-    assert reply.session_expired is True
-    second, _ = make_session(conn, settings, [INIT_OK, result("Listo")])
-    assert (await second.send("hola")).session_expired is False
-
-
 async def test_open_passes_routines_to_prompt(conn, settings):
     from financial_agent.store.contacts import add_destination, create_contact
     from financial_agent.store.routines import create_routine

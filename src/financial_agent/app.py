@@ -6,6 +6,7 @@ from telegram.error import TelegramError
 
 from financial_agent.agent.session import AgentSession
 from financial_agent.bot.application import build_application, start_bot, stop_bot
+from financial_agent.bot.fiwind_session import send_session_expired
 from financial_agent.config import Settings, load_settings
 from financial_agent.fiwind.browser import AgentBrowser, find_binary
 from financial_agent.fiwind.client import Credentials, FiwindClient
@@ -43,14 +44,20 @@ def create_app(settings: Settings | None = None, with_bot: bool = True) -> FastA
             credentials = None
             if active.fiwind_email and active.fiwind_password:
                 credentials = Credentials(active.fiwind_email, active.fiwind_password)
-            wallet = FiwindClient(browser, credentials)
+            bot = None
+
+            async def notify_session_expired() -> None:
+                # La wallet se arma antes que el bot: el aviso usa el bot que haya al avisar.
+                if bot is not None:
+                    await send_session_expired(bot.bot, active.telegram_owner_id)
+
+            wallet = FiwindClient(browser, credentials, on_session_expired=notify_session_expired)
             session = AgentSession(active, conn, wallet=wallet)
             for action in interrupted:
                 session.add_context_note(
                     f"Resultado de la transferencia ({agent_text(action)}): "
                     "sin confirmar, la app se reinició durante el envío"
                 )
-            bot = None
             scheduler = None
             try:
                 if with_bot:

@@ -8,7 +8,7 @@ from fakes import FakeWallet
 from telegram.error import NetworkError
 
 from financial_agent.bot.chat import on_pending_callback
-from financial_agent.bot.fiwind_session import MSG_SESSION_EXPIRED, on_fiwind_callback
+from financial_agent.bot.fiwind_session import on_fiwind_callback
 from financial_agent.bot.transfer_flow import manual_keyboard, on_manual_callback
 from financial_agent.fiwind.client import Expired, Mismatch, NotSent
 from financial_agent.fiwind.pages import Recipient
@@ -200,16 +200,15 @@ async def test_not_sent_sends_manual_buttons(conn):
     assert [b.callback_data for b in buttons] == [f"t:done:{a.id}", f"t:skip:{a.id}"]
 
 
-async def test_expired_sends_session_notice(conn):
+async def test_expired_offers_the_manual_path(conn):
     wallet = FakeWallet(recipient=HOLDER, outcome=Expired())
     a = await _pending_transfer(conn, wallet)
     query = _query(f"p:ok:{a.id}", chat_id=7)
     ctx = _ctx(conn, wallet)
     await on_pending_callback(_update(query), ctx)
-    call = ctx.bot.send_message.await_args
-    assert call.args == (7, MSG_SESSION_EXPIRED)
-    assert call.kwargs["reply_markup"].inline_keyboard[0][0].callback_data == "f:login"
     assert query.message.reply_text.await_args.args[0].startswith("Podés hacerla a mano")
+    # El aviso de sesión vencida lo manda la wallet.
+    ctx.bot.send_message.assert_not_awaited()
 
 
 async def test_mismatch_sends_follow_up(conn):
@@ -293,14 +292,3 @@ async def test_second_edit_failure_still_sends_follow_ups(conn):
     await on_pending_callback(_update(query), ctx)
     ctx.application.bot_data["session"].add_context_note.assert_called_once()
     assert query.message.reply_text.await_args.args[0].startswith("Podés hacerla a mano")
-    assert ctx.bot.send_message.await_args.args == (7, MSG_SESSION_EXPIRED)
-
-
-async def test_failing_send_does_not_skip_others(conn):
-    wallet = FakeWallet(recipient=HOLDER, outcome=Expired())
-    a = await _pending_transfer(conn, wallet)
-    query = _query(f"p:ok:{a.id}", chat_id=7)
-    query.message.reply_text.side_effect = NetworkError("x")
-    ctx = _ctx(conn, wallet)
-    await on_pending_callback(_update(query), ctx)
-    assert ctx.bot.send_message.await_args.args == (7, MSG_SESSION_EXPIRED)

@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock
 from fakes import FakeWallet
 
 from financial_agent.bot.balance_cmd import on_saldo
-from financial_agent.bot.fiwind_session import MSG_SESSION_EXPIRED
 from financial_agent.fiwind.client import FiwindUnavailable, SessionExpired
 
 
@@ -26,12 +25,10 @@ async def test_saldo_shows_balance():
     assert wallet.calls == [("read_balance",)]
 
 
-async def test_saldo_session_expired_sends_login_button():
+async def test_saldo_session_expired_leaves_the_notice_to_the_wallet():
     update, context = _run(FakeWallet(balance_error=SessionExpired("abrir Fiwind")))
     await on_saldo(update, context)
-    call = context.bot.send_message.await_args
-    assert call.args == (7, MSG_SESSION_EXPIRED)
-    assert call.kwargs["reply_markup"].inline_keyboard[0][0].callback_data == "f:login"
+    context.bot.send_message.assert_not_awaited()
     update.effective_message.reply_text.assert_not_awaited()
 
 

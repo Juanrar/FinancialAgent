@@ -8,7 +8,6 @@ from telegram.ext import ContextTypes
 from financial_agent.agent.session import AgentError
 from financial_agent.bot.awaiting import get_awaiting
 from financial_agent.bot.callback_data import make_callback, parse_callback, safe_answer
-from financial_agent.bot.fiwind_session import send_session_expired
 from financial_agent.bot.transfer_flow import confirm_transfer
 from financial_agent.store.db import NotFoundError
 from financial_agent.store.pending import agent_text, cancel_action, confirm_action, get_action
@@ -75,8 +74,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except AgentError as error:
         await message.reply_text(error.user_message)
         await _send_pending(message, error.pending)
-        if session.turn.session_expired:
-            await send_session_expired(context.bot, update.effective_chat.id)
         return
     finally:
         typing.cancel()
@@ -89,8 +86,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     elif not reply.pending:
         await message.reply_text(MSG_NOTHING)
     await _send_pending(message, reply.pending)
-    if reply.session_expired:
-        await send_session_expired(context.bot, update.effective_chat.id)
 
 
 def _is_transfer(conn, action_id: int) -> bool:

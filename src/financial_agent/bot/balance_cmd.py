@@ -4,7 +4,6 @@ from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
-from financial_agent.bot.fiwind_session import send_session_expired
 from financial_agent.fiwind.client import FiwindUnavailable, SessionExpired
 from financial_agent.money import format_amount
 
@@ -21,7 +20,7 @@ async def on_saldo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         balance = await wallet.read_balance()
     except SessionExpired:
-        await send_session_expired(context.bot, chat_id)
+        # La wallet ya le mandó a Juan el aviso de sesión vencida.
         return
     except FiwindUnavailable as error:
         await message.reply_text(f"No pude leer el saldo: {error.reason}")

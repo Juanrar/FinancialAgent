@@ -207,17 +207,15 @@ async def test_pedir_transferencia_session_expired(conn):
     add_destination(conn, c.id, "alias", "fede.mp")
     result = await tools["pedir_transferencia"].handler({"contacto_id": c.id, "monto": "2000"})
     assert result["is_error"] is True and "venció" in _text(result)
-    assert turn.session_expired is True
     assert turn.pending == []
 
 
 async def test_pedir_transferencia_fiwind_unavailable(conn):
-    tools, turn = _tools(conn, FakeWallet(lookup_error=FiwindUnavailable("buscar", "timeout")))
+    tools, _ = _tools(conn, FakeWallet(lookup_error=FiwindUnavailable("buscar", "timeout")))
     c = create_contact(conn, "Fede")
     add_destination(conn, c.id, "alias", "fede.mp")
     result = await tools["pedir_transferencia"].handler({"contacto_id": c.id, "monto": "2000"})
     assert result["is_error"] is True and "paso buscar" in _text(result)
-    assert turn.session_expired is False
 
 
 async def test_agregar_destino_verifies(conn):
@@ -254,7 +252,6 @@ async def test_agregar_destino_unverified_keeps_destination(conn):
     )
     assert turn.notices[0].endswith("sin verificar: la sesión de Fiwind venció)")
     assert "Sin verificar: la sesión de Fiwind venció" in _text(result)
-    assert turn.session_expired is True
     assert len(get_contact(conn, c.id).destinations) == 1
 
 
@@ -265,7 +262,6 @@ async def test_agregar_destino_not_found_in_fiwind(conn):
         {"contacto_id": c.id, "tipo": "alias", "valor": "fede.mp"}
     )
     assert turn.notices[0].endswith("sin verificar: Fiwind no encontró ese destino)")
-    assert turn.session_expired is False
 
 
 async def test_agregar_destino_without_browser(conn):
@@ -354,12 +350,6 @@ async def test_crear_rutina_bad_amount(conn):
     assert r["is_error"] is True and turn.notices == []
 
 
-def test_turn_reset_clears_session_expired():
-    turn = TurnState(session_expired=True)
-    turn.reset()
-    assert turn.session_expired is False
-
-
 def _history_dest(conn, name, alias):
     c = create_contact(conn, name)
     d = add_destination(conn, c.id, "alias", alias)
@@ -424,16 +414,14 @@ async def test_listar_transferencias_empty_and_unknown_contact(conn):
 
 
 async def test_ver_saldo(conn):
-    tools, turn = _tools(conn, FakeWallet(balance=150050))
+    tools, _ = _tools(conn, FakeWallet(balance=150050))
     assert _text(await tools["ver_saldo"].handler({})) == "Saldo disponible en Fiwind: $1.500,50"
-    assert turn.session_expired is False
 
 
 async def test_ver_saldo_session_expired(conn):
-    tools, turn = _tools(conn, FakeWallet(balance_error=SessionExpired("abrir Fiwind")))
+    tools, _ = _tools(conn, FakeWallet(balance_error=SessionExpired("abrir Fiwind")))
     result = await tools["ver_saldo"].handler({})
     assert result["is_error"] is True and "venció" in _text(result)
-    assert turn.session_expired is True
 
 
 async def test_ver_saldo_not_shown(conn):

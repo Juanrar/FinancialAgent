@@ -5,7 +5,6 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from financial_agent.bot.chat import pending_keyboard
-from financial_agent.bot.fiwind_session import send_session_expired
 from financial_agent.config import Settings
 from financial_agent.fiwind.client import FiwindUnavailable, SessionExpired
 from financial_agent.money import format_amount
@@ -97,7 +96,7 @@ class Scheduler:
         try:
             balance = await self.wallet.read_balance()
         except SessionExpired:
-            await send_session_expired(self.bot, self.settings.telegram_owner_id)
+            # La wallet ya le mandó a Juan el aviso de sesión vencida.
             return
         except FiwindUnavailable as error:
             logger.warning("no se pudo leer el saldo de Fiwind: %s", type(error).__name__)
@@ -150,14 +149,10 @@ class Scheduler:
             logger.warning(
                 "no se pudo preparar la rutina %s: %s", routine.id, type(error).__name__
             )
-            try:
-                await self._send(
-                    f"No pude preparar la rutina ({describe_routine(self.conn, routine)}): "
-                    f"{_reason(error, _PREPARE_EXPIRED)}. Pedímela cuando quieras."
-                )
-            finally:
-                if isinstance(error, SessionExpired):
-                    await send_session_expired(self.bot, self.settings.telegram_owner_id)
+            await self._send(
+                f"No pude preparar la rutina ({describe_routine(self.conn, routine)}): "
+                f"{_reason(error, _PREPARE_EXPIRED)}. Pedímela cuando quieras."
+            )
             return
         await self._send(
             f"Rutina del mes: {action.description}", reply_markup=pending_keyboard(action.id)

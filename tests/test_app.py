@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -167,6 +168,25 @@ def test_restart_notice_failure_does_not_stop_startup(settings, monkeypatch):
     with TestClient(create_app(settings)) as client:
         assert client.get("/health").status_code == 200
     assert len(sessions[0]._context_notes) == 1
+
+
+def test_wallet_sends_session_expired_notice_to_juan(settings, monkeypatch):
+    from financial_agent.bot.fiwind_session import MSG_SESSION_EXPIRED
+    from financial_agent.fiwind.client import FiwindClient
+
+    send = AsyncMock()
+    _patch_bot(monkeypatch, send)
+    notifiers = []
+
+    def make_wallet(*args, **kwargs):
+        notifiers.append(kwargs["on_session_expired"])
+        return FiwindClient(*args, **kwargs)
+
+    monkeypatch.setattr("financial_agent.app.FiwindClient", make_wallet)
+    with TestClient(create_app(settings)):
+        asyncio.run(notifiers[0]())
+    send.assert_awaited_once()
+    assert send.await_args.args == (1, MSG_SESSION_EXPIRED)
 
 
 def test_restart_without_bot_still_marks_unconfirmed(settings, monkeypatch):

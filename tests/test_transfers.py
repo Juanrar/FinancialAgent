@@ -167,7 +167,7 @@ async def test_run_expired(conn):
     wallet = FakeWallet(recipient=FEDE, outcome=Expired())
     a = await _claimed(conn, wallet)
     report = await run_transfer(conn, wallet, a)
-    assert report.session_expired and report.manual_action_id == a.id
+    assert report.manual_action_id == a.id
     assert get_action(conn, a.id).status == "no_salio"
 
 

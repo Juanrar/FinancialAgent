@@ -40,7 +40,6 @@ class TransferReport:
     agent_note: str
     manual_action_id: int | None = None
     follow_up: PendingAction | None = None
-    session_expired: bool = False
 
 
 def _no_emails(contact: Contact) -> DestinationError:
@@ -195,7 +194,6 @@ async def run_transfer(
             "No salió: la sesión de Fiwind venció.",
             _note(action, "no salió porque venció la sesión de Fiwind"),
             manual_action_id=action.id,
-            session_expired=True,
         )
     pending.finish_transfer(conn, action.id, "sin_confirmar", outcome.step)
     return TransferReport(

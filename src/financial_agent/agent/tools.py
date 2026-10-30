@@ -55,12 +55,10 @@ ALLOWED_TOOLS: list[str] = [f"mcp__{SERVER_NAME}__{n}" for n in TOOL_NAMES]
 class TurnState:
     notices: list[str] = field(default_factory=list)
     pending: list[PendingAction] = field(default_factory=list)
-    session_expired: bool = False
 
     def reset(self) -> None:
         self.notices.clear()
         self.pending.clear()
-        self.session_expired = False
 
 
 def _ok(text: str) -> dict:
@@ -71,16 +69,13 @@ def _error(message: str) -> dict:
     return {"content": [{"type": "text", "text": f"Error: {message}"}], "is_error": True}
 
 
-def _safe(
-    turn: TurnState, fn: Callable[[dict], Awaitable[dict]]
-) -> Callable[[dict], Awaitable[dict]]:
+def _safe(fn: Callable[[dict], Awaitable[dict]]) -> Callable[[dict], Awaitable[dict]]:
     async def wrapper(args: dict) -> dict:
         try:
             return await fn(args)
         except (ValidationError, NotFoundError) as error:
             return _error(str(error))
         except SessionExpired:
-            turn.session_expired = True
             return _error("la sesión de Fiwind venció. El bot le avisó a Juan para que la inicie.")
         except FiwindUnavailable as error:
             return _error(f"no pude usar Fiwind en el paso {error.step}.")
@@ -152,9 +147,6 @@ def build_tools(
     timezone: str = "America/Argentina/Buenos_Aires",
     clock: Callable[[], datetime] = utc_now,
 ) -> list[SdkMcpTool]:
-    def _guard(fn):
-        return _safe(turn, fn)
-
     def routine_notice(verb: str, routine) -> str:
         next_date = routines.next_run_date(routine, clock(), hour=routine_hour, tz=timezone)
         text = routines.describe_routine(conn, routine)
@@ -171,12 +163,12 @@ def build_tools(
         "Usala antes de actuar sobre un contacto para obtener su id.",
         {"texto": str},
     )
-    @_guard
+    @_safe
     async def buscar_contactos(args):
         return _ok(_format_contacts(contacts.search_contacts(conn, args["texto"])))
 
     @tool("listar_contactos", "Lista todos los contactos con sus apodos y destinos.", {})
-    @_guard
+    @_safe
     async def listar_contactos(args):
         return _ok(_format_contacts(contacts.list_contacts(conn)))
 
@@ -185,7 +177,7 @@ def build_tools(
         "Crea un contacto nuevo. Usala cuando Juan menciona a una persona que todavía no existe.",
         {"nombre": str},
     )
-    @_guard
+    @_safe
     async def crear_contacto(args):
         contact = contacts.create_contact(conn, args["nombre"])
         turn.notices.append(f"(creé el contacto {contact.name})")
@@ -196,7 +188,7 @@ def build_tools(
         "Cambia el nombre de un contacto.",
         {"contacto_id": int, "nombre": str},
     )
-    @_guard
+    @_safe
     async def renombrar_contacto(args):
         old = contacts.get_contact(conn, args["contacto_id"])
         new = contacts.rename_contact(conn, args["contacto_id"], args["nombre"])
@@ -209,14 +201,14 @@ def build_tools(
         '"Fede es mi hermano" agrega el apodo "mi hermano".',
         {"contacto_id": int, "apodo": str},
     )
-    @_guard
+    @_safe
     async def agregar_apodo(args):
         contact = contacts.add_nickname(conn, args["contacto_id"], args["apodo"])
         turn.notices.append(f"(agregué a {contact.name} el apodo {args['apodo']})")
         return _ok(_format_contact(contact))
 
     @tool("quitar_apodo", "Quita un apodo de un contacto.", {"contacto_id": int, "apodo": str})
-    @_guard
+    @_safe
     async def quitar_apodo(args):
         contact = contacts.remove_nickname(conn, args["contacto_id"], args["apodo"])
         turn.notices.append(f"(le saqué a {contact.name} el apodo {args['apodo']})")
@@ -228,7 +220,7 @@ def build_tools(
         "El primer destino de un contacto queda como principal.",
         {"contacto_id": int, "tipo": str, "valor": str},
     )
-    @_guard
+    @_safe
     async def agregar_destino(args):
         dest = contacts.add_destination(conn, args["contacto_id"], args["tipo"], args["valor"])
         contact = contacts.get_contact(conn, args["contacto_id"])
@@ -244,7 +236,6 @@ def build_tools(
                 contact = contacts.get_contact(conn, args["contacto_id"])
             except (ValidationError, SessionExpired, FiwindUnavailable) as error:
                 if isinstance(error, SessionExpired):
-                    turn.session_expired = True
                     reason = "la sesión de Fiwind venció"
                 elif isinstance(error, FiwindUnavailable):
                     reason = f"no pude usar Fiwind ({error.step})"
@@ -262,7 +253,7 @@ def build_tools(
         "Pide marcar un destino como el principal de su contacto. Juan lo confirma con botones.",
         {"destino_id": int},
     )
-    @_guard
+    @_safe
     async def pedir_cambio_principal(args):
         return request("set_primary", {"destination_id": args["destino_id"]})
 
@@ -272,7 +263,7 @@ def build_tools(
         "Juan lo confirma con botones.",
         {"destino_id": int, "valor": str},
     )
-    @_guard
+    @_safe
     async def pedir_cambio_valor_destino(args):
         dest = contacts.get_destination(conn, args["destino_id"])
         value = validate_destination(dest.type, args["valor"])
@@ -283,7 +274,7 @@ def build_tools(
         "Pide borrar un destino de pago. Juan lo confirma con botones.",
         {"destino_id": int},
     )
-    @_guard
+    @_safe
     async def pedir_borrar_destino(args):
         return request("delete_destination", {"destination_id": args["destino_id"]})
 
@@ -292,12 +283,12 @@ def build_tools(
         "Pide borrar un contacto con todos sus destinos. Juan lo confirma con botones.",
         {"contacto_id": int},
     )
-    @_guard
+    @_safe
     async def pedir_borrar_contacto(args):
         return request("delete_contact", {"contact_id": args["contacto_id"]})
 
     @tool("listar_memoria", "Lista las notas de memoria con su id.", {})
-    @_guard
+    @_safe
     async def listar_memoria(args):
         notes = memory.list_notes(conn)
         if not notes:
@@ -310,7 +301,7 @@ def build_tools(
         "No uses la memoria para datos de contactos.",
         {"texto": str},
     )
-    @_guard
+    @_safe
     async def guardar_memoria(args):
         note = memory.add_note(conn, args["texto"])
         turn.notices.append(f"(guardé en memoria: {note.text})")
@@ -321,14 +312,14 @@ def build_tools(
         "Cambia el texto de una nota de memoria.",
         {"nota_id": int, "texto": str},
     )
-    @_guard
+    @_safe
     async def editar_memoria(args):
         note = memory.update_note(conn, args["nota_id"], args["texto"])
         turn.notices.append(f"(cambié en memoria: {note.text})")
         return _ok(f"Nota {note.id} actualizada.")
 
     @tool("borrar_memoria", "Borra una nota de memoria.", {"nota_id": int})
-    @_guard
+    @_safe
     async def borrar_memoria(args):
         note = memory.delete_note(conn, args["nota_id"])
         turn.notices.append(f"(borré de memoria: {note.text})")
@@ -347,7 +338,7 @@ def build_tools(
             ["contacto_id", "monto"],
         ),
     )
-    @_guard
+    @_safe
     async def pedir_transferencia(args):
         amount = parse_amount(args["monto"])
         action = await prepare_transfer(
@@ -370,7 +361,7 @@ def build_tools(
             ["contacto_id", "monto", "dia"],
         ),
     )
-    @_guard
+    @_safe
     async def crear_rutina(args):
         if args.get("destino_id") is None:
             # Falla ahora y no recién el día de la rutina.
@@ -400,7 +391,7 @@ def build_tools(
             ["rutina_id"],
         ),
     )
-    @_guard
+    @_safe
     async def editar_rutina(args):
         amount = parse_amount(args["monto"]) if args.get("monto") is not None else None
         routine = routines.update_routine(
@@ -416,14 +407,14 @@ def build_tools(
         return _ok(f"Rutina {routine.id} actualizada.")
 
     @tool("borrar_rutina", "Borra una rutina.", {"rutina_id": int})
-    @_guard
+    @_safe
     async def borrar_rutina(args):
         routine = routines.delete_routine(conn, args["rutina_id"])
         turn.notices.append(f"(borré la rutina: {routines.describe_routine(conn, routine)})")
         return _ok(f"Rutina {routine.id} borrada.")
 
     @tool("listar_rutinas", "Lista las rutinas mensuales con su id.", {})
-    @_guard
+    @_safe
     async def listar_rutinas(args):
         found = routines.list_routines(conn)
         if not found:
@@ -445,7 +436,7 @@ def build_tools(
             [],
         ),
     )
-    @_guard
+    @_safe
     async def listar_transferencias(args):
         contact_id = args.get("contacto_id")
         if contact_id is not None:
@@ -467,7 +458,7 @@ def build_tools(
         return _ok("\n".join([*lines, f"Total enviado: {format_amount(sent)}"]))
 
     @tool("ver_saldo", "Lee en Fiwind el saldo disponible en pesos.", {})
-    @_guard
+    @_safe
     async def ver_saldo(args):
         balance = await wallet.read_balance()
         if balance is None:

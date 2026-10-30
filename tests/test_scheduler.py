@@ -6,7 +6,6 @@ from zoneinfo import ZoneInfo
 
 from fakes import FakeWallet
 
-from financial_agent.bot.fiwind_session import MSG_SESSION_EXPIRED
 from financial_agent.fiwind.client import FiwindUnavailable, SessionExpired
 from financial_agent.fiwind.pages import Recipient
 from financial_agent.scheduler import Scheduler
@@ -94,7 +93,6 @@ async def test_routine_prepare_fails(settings, conn):
         "No pude preparar la rutina ($30.000 a Tío Pepe los días 5): "
         "la sesión de Fiwind venció. Pedímela cuando quieras."
     ) in texts
-    assert MSG_SESSION_EXPIRED in texts
     count = len(texts)
     await s.tick(local(2026, 11, 5, 10, 1))
     assert len(_texts(bot)) == count
@@ -152,13 +150,16 @@ async def test_balance_read_daily_without_routines_in_window(settings, conn):
     assert _texts(bot) == []
 
 
-async def test_balance_check_warns_expired_session_once_a_day(settings, conn):
-    s, bot = _scheduler(settings, conn, _wallet(balance_error=SessionExpired("abrir Fiwind")))
+async def test_balance_check_with_expired_session_reads_once_a_day(settings, conn):
+    # El aviso de sesión vencida lo manda la wallet: el scheduler no escribe nada.
+    wallet = _wallet(balance_error=SessionExpired("abrir Fiwind"))
+    s, bot = _scheduler(settings, conn, wallet)
     await s.tick(local(2026, 11, 5, 9))
     await s.tick(local(2026, 11, 5, 9, 30))
-    assert _texts(bot) == [MSG_SESSION_EXPIRED]
+    assert wallet.calls == [("read_balance",)]
     await s.tick(local(2026, 11, 6, 9))
-    assert _texts(bot) == [MSG_SESSION_EXPIRED, MSG_SESSION_EXPIRED]
+    assert wallet.calls == [("read_balance",), ("read_balance",)]
+    assert _texts(bot) == []
 
 
 async def test_unreadable_balance_sends_nothing(settings, conn):
@@ -252,19 +253,6 @@ async def test_failed_send_for_one_routine_does_not_stop_the_others(settings, co
     await s.tick(local(2026, 11, 5, 10))
     routine_texts = [t for t in _texts(bot) if t.startswith("Rutina del mes")]
     assert len(routine_texts) == 2  # el primero falló al enviarse, el segundo salió
-
-
-async def test_failed_prepare_notice_still_sends_session_notice(settings, conn):
-    _routine(conn, day=5, created=local(2026, 10, 1, 12))
-    s, bot = _scheduler(settings, conn, FakeWallet(lookup_error=SessionExpired("abrir Fiwind")))
-
-    async def flaky(chat_id, text, **kwargs):
-        if text.startswith("No pude preparar"):
-            raise RuntimeError("red caída")
-
-    bot.send_message.side_effect = flaky
-    await s.tick(local(2026, 11, 5, 10))
-    assert MSG_SESSION_EXPIRED in _texts(bot)
 
 
 async def test_prepare_failure_text_for_contact_without_destinations(settings, conn):

@@ -18,12 +18,26 @@ from fiwind_samples import (
 )
 
 
-def _client(responses=None):
+def _client(responses=None, notices=None, clock=None):
     base = {("get", "url"): WITHDRAWAL_URL, ("get", "text", "form"): LOOKUP_FOUND,
             ("get", "text", DIALOG): [CONFIRM_DIALOG], ("eval", RESULT_TEXT_JS): RESULT_EVAL,
             ("snapshot", "-c"): DASHBOARD}
     browser = FakeBrowser(base | (responses or {}))
-    return FiwindClient(browser), browser
+    client = FiwindClient(browser, clock=clock or (lambda: 0), on_session_expired=notices)
+    return client, browser
+
+
+class Notices:
+    """Adaptador de prueba del aviso de sesión vencida: cuenta los avisos."""
+
+    def __init__(self, error=None):
+        self.count = 0
+        self.error = error
+
+    async def __call__(self):
+        self.count += 1
+        if self.error:
+            raise self.error
 
 
 RESULT_EVAL = json.dumps(RESULT_DIALOG)
@@ -191,6 +205,49 @@ async def test_session_expired_in_panel():
         await client.read_balance()
 
 
+EXPIRED = {("get", "url"): LOGIN_URL}
+
+
+@pytest.mark.parametrize("operation", [lambda c: c.read_balance(), lambda c: c.lookup("a.b.c")])
+async def test_expired_session_sends_notice(operation):
+    notices = Notices()
+    client, _ = _client(EXPIRED, notices)
+    with pytest.raises(SessionExpired):
+        await operation(client)
+    assert notices.count == 1
+
+
+async def test_expired_withdraw_sends_notice():
+    notices = Notices()
+    client, _ = _client(EXPIRED, notices)
+    assert await client.withdraw(ORDER) == Expired()
+    assert notices.count == 1
+
+
+async def test_notice_at_most_once_every_ten_minutes():
+    now = [0]
+    notices = Notices()
+    client, _ = _client(EXPIRED, notices, clock=lambda: now[0])
+    await client.withdraw(ORDER)
+    now[0] = 599
+    with pytest.raises(SessionExpired):
+        await client.read_balance()
+    assert notices.count == 1
+    now[0] = 601
+    with pytest.raises(SessionExpired):
+        await client.lookup("a.b.c")
+    assert notices.count == 2
+
+
+async def test_failed_notice_keeps_the_outcome_and_is_retried():
+    notices = Notices(error=RuntimeError("telegram caído"))
+    client, _ = _client(EXPIRED, notices)
+    assert await client.withdraw(ORDER) == Expired()
+    with pytest.raises(SessionExpired):
+        await client.read_balance()
+    assert notices.count == 2
+
+
 EMAIL, PASSWORD, CODE = "juan@mail.com", "clave-123", "432802"
 AUTHORIZE_URL = "https://panel.fiwind.io/auth/authorize-device"
 INGRESAR = ("find", "role", "button", "click", "--name", "Ingresar")
@@ -199,10 +256,11 @@ TYPE_PASSWORD = ("type", PASSWORD_INPUT, PASSWORD)
 WAITING_CODE = "hay un inicio de sesión esperando el código"
 
 
-def _login_client(urls, responses=None, clock=None):
+def _login_client(urls, responses=None, clock=None, notices=None):
     base = {("get", "url"): list(urls), ("get", "text", "form"): LOOKUP_FOUND}
     browser = FakeBrowser(base | (responses or {}))
-    client = FiwindClient(browser, Credentials(EMAIL, PASSWORD), clock=clock or (lambda: 0))
+    client = FiwindClient(browser, Credentials(EMAIL, PASSWORD), clock=clock or (lambda: 0),
+                          on_session_expired=notices)
     return client, browser
 
 
@@ -313,6 +371,30 @@ async def test_submit_code_browser_error():
     assert info.value.step == STEP_LOGIN
     assert browser.calls[-1] == ("close",)
     assert await client.lookup("ana.alias") == Recipient(HOLDER, BANK, CVU)
+
+
+async def _log_in_directly(client):
+    return await client.start_login()
+
+
+async def _log_in_with_code(client):
+    assert await client.start_login() == CodeRequired()
+    return await client.submit_code(CODE)
+
+
+@pytest.mark.parametrize("urls,log_in", [
+    ([LOGIN_URL, PANEL_URL, LOGIN_URL], _log_in_directly),
+    ([LOGIN_URL, LOGIN_URL, AUTHORIZE_URL, PANEL_URL, LOGIN_URL], _log_in_with_code),
+])
+async def test_logging_in_allows_a_new_notice(urls, log_in):
+    notices = Notices()
+    client, _ = _login_client(urls, notices=notices)
+    with pytest.raises(SessionExpired):
+        await client.read_balance()
+    assert await log_in(client) == LoggedIn()
+    with pytest.raises(SessionExpired):
+        await client.read_balance()
+    assert notices.count == 2
 
 
 async def test_read_balance_raises_on_login_waiting_code_and_browser_error():

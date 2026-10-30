@@ -12,7 +12,6 @@ from financial_agent.bot.contacts_cmd import (
     on_contacts,
     on_contacts_callback,
 )
-from financial_agent.bot.fiwind_session import MSG_SESSION_EXPIRED
 from financial_agent.fiwind.client import SessionExpired
 from financial_agent.store import contacts as store
 from financial_agent.store.contacts import Contact, Destination
@@ -366,15 +365,16 @@ async def test_add_destination_unverified_reason(conn, settings):
     assert any(r.startswith("Sin verificar: ") and "agent-browser" in r for r in replies)
 
 
-async def test_add_destination_session_expired_sends_notice(conn, settings):
+async def test_add_destination_session_expired_reason(conn, settings):
     contact = store.create_contact(conn, "Fede")
     wallet = FakeWallet(lookup_error=SessionExpired("buscar"))
     context = _wallet_context(conn, settings, wallet)
     update = _message_update("fede.mp")
     await handle_awaiting(update, context, Awaiting("destination_add", contact.id))
     replies = [c.args[0] for c in update.effective_message.reply_text.await_args_list]
-    assert any(r.startswith("Sin verificar: ") for r in replies)
-    assert context.bot.send_message.await_args.args[1] == MSG_SESSION_EXPIRED
+    assert "Sin verificar: la sesión de Fiwind venció." in replies
+    # El aviso de sesión vencida lo manda la wallet.
+    context.bot.send_message.assert_not_awaited()
 
 
 async def test_add_email_destination_skips_verification(conn, settings):

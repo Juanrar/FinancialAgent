@@ -60,7 +60,6 @@ class AgentError(Exception):
 class AgentReply:
     text: str
     pending: list[PendingAction]
-    session_expired: bool = False
 
 
 def build_options(
@@ -176,7 +175,6 @@ class AgentSession:
         return AgentReply(
             text="\n".join(part for part in parts if part),
             pending=list(self.turn.pending),
-            session_expired=self.turn.session_expired,
         )
 
     async def _open(self) -> ClaudeSDKClient:

@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from financial_agent.fiwind.browser import AgentBrowser, BrowserCommandError
@@ -47,6 +48,8 @@ LOGIN_DONE_JS = ("location.pathname !== '/auth/login' || "
 CODE_DONE_JS = "!location.pathname.startsWith('/auth/')"
 AUTHORIZE_PATH = "/auth/authorize-device"
 LOGIN_TIMEOUT = 600
+# Un turno del agente o del scheduler puede encontrar la sesión vencida varias veces seguidas.
+NOTICE_INTERVAL = 600
 
 STEP_LOGIN = "iniciar sesión"
 STEP_OPEN = "abrir Fiwind"
@@ -161,10 +164,14 @@ def _reason(exc: Exception) -> str:
 
 class FiwindClient:
     def __init__(self, browser: AgentBrowser | None, credentials: Credentials | None = None,
-                 clock=time.monotonic):
+                 clock=time.monotonic,
+                 on_session_expired: Callable[[], Awaitable[None]] | None = None):
         self._browser = browser
         self._credentials = credentials
         self._clock = clock
+        # Aviso de sesión vencida: lo manda la wallet, no quien llama.
+        self._on_session_expired = on_session_expired
+        self._notice_sent_at: float | None = None
         self._lock = asyncio.Lock()
         # Login esperando el código del mail: el navegador queda abierto en esa pantalla.
         self._login_open = False
@@ -201,6 +208,8 @@ class FiwindClient:
                            else NotSent(self._step, _reason(exc)))
             logger.info("fiwind withdraw: paso=%s resultado=%s", self._step,
                         type(outcome).__name__)
+            if isinstance(outcome, Expired):
+                await self._notify_expired()
             return outcome
 
     async def read_balance(self) -> int | None:
@@ -227,6 +236,8 @@ class FiwindClient:
                 self._login_started = self._clock()
             else:
                 await asyncio.to_thread(self._browser.close)
+            if isinstance(outcome, LoggedIn):
+                self._notice_sent_at = None
             logger.info("fiwind start_login: resultado=%s", type(outcome).__name__)
             return outcome
 
@@ -243,10 +254,26 @@ class FiwindClient:
             finally:
                 self._login_open = False
                 await asyncio.to_thread(self._browser.close)
+            if isinstance(outcome, LoggedIn):
+                self._notice_sent_at = None
             logger.info("fiwind submit_code: resultado=%s", type(outcome).__name__)
             return outcome
 
     # --- soporte ---
+
+    async def _notify_expired(self) -> None:
+        if self._on_session_expired is None:
+            return
+        if (self._notice_sent_at is not None
+                and self._clock() - self._notice_sent_at < NOTICE_INTERVAL):
+            return
+        # Un aviso que falla no cambia el resultado de la operación y se reintenta en la próxima.
+        try:
+            await self._on_session_expired()
+        except Exception as exc:
+            logger.warning("fiwind aviso de sesión vencida: resultado=%s", type(exc).__name__)
+            return
+        self._notice_sent_at = self._clock()
 
     async def _drop_stale_login(self) -> None:
         if self._login_open and self._clock() - self._login_started > LOGIN_TIMEOUT:
@@ -296,6 +323,7 @@ class FiwindClient:
             return await self._exclusive(name, fn, *args)
         except SessionExpired:
             logger.info("fiwind %s: paso=%s resultado=SessionExpired", name, self._step)
+            await self._notify_expired()
             raise
         except FiwindUnavailable:
             raise
