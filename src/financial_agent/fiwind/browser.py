@@ -1,6 +1,7 @@
 """Ejecutor sincrónico del CLI agent-browser."""
 
 import logging
+import os
 import shutil
 import subprocess
 import tempfile
@@ -38,15 +39,8 @@ class AgentBrowser:
         self.headed = headed
         self.timeout = timeout
 
-    def open(self, url: str, headed: bool | None = None) -> None:
-        # --profile y --headed van solo en open. Si el navegador ya está
-        # corriendo y un comando los repite, agent-browser avisa que los ignora
-        # y deja la página en about:blank.
-        show = self.headed if headed is None else headed
-        args = ["--profile", str(self.profile)]
-        if show:
-            args.append("--headed")
-        self._exec(self._prefix() + args + ["open", url], ("open", url))
+    def open(self, url: str) -> None:
+        self._exec(self._prefix() + ["open", url], ("open", url))
 
     def run(self, *args: str) -> str:
         output = self._exec(self._prefix() + list(args), tuple(args))
@@ -62,6 +56,19 @@ class AgentBrowser:
     def _prefix(self) -> list[str]:
         return [self.binary, "--session", self.session]
 
+    def _env(self) -> dict[str, str]:
+        # Perfil y headed van en el entorno de todos los comandos. Si un comando
+        # llega con opciones de arranque distintas a las del navegador abierto
+        # (por ejemplo, AGENT_BROWSER_EXECUTABLE_PATH sin el perfil), agent-browser
+        # reinicia el navegador y la página queda en about:blank.
+        env = dict(os.environ)
+        env["AGENT_BROWSER_PROFILE"] = str(self.profile)
+        if self.headed:
+            env["AGENT_BROWSER_HEADED"] = "1"
+        else:
+            env.pop("AGENT_BROWSER_HEADED", None)
+        return env
+
     def _exec(self, cmd: list[str], command: tuple[str, ...]) -> str:
         name = command[0] if command else ""
         # La salida va a un archivo temporal y no a un pipe: si el comando
@@ -71,7 +78,7 @@ class AgentBrowser:
             try:
                 result = subprocess.run(
                     cmd, stdin=subprocess.DEVNULL, stdout=out,
-                    stderr=subprocess.STDOUT, timeout=self.timeout,
+                    stderr=subprocess.STDOUT, timeout=self.timeout, env=self._env(),
                 )
             except subprocess.TimeoutExpired:
                 logger.warning("agent-browser %s: timeout", name)

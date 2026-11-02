@@ -196,7 +196,7 @@ async def test_operations_are_serialized():
 async def test_read_balance():
     client, browser = _client({("get", "url"): PANEL_URL})
     assert await client.read_balance() == 300
-    assert ("open", PANEL_URL, None) in browser.calls
+    assert ("open", PANEL_URL) in browser.calls
 
 
 async def test_session_expired_in_panel():
@@ -267,7 +267,7 @@ def _login_client(urls, responses=None, clock=None, notices=None):
 async def test_login_known_device():
     client, browser = _login_client([LOGIN_URL, PANEL_URL])
     assert await client.start_login() == LoggedIn()
-    assert ("open", LOGIN_URL, None) in browser.calls
+    assert ("open", LOGIN_URL) in browser.calls
     steps = [browser.calls.index(c) for c in (TYPE_EMAIL, ("wait", "4000"), TYPE_PASSWORD, INGRESAR)]
     assert steps == sorted(steps)
     # Fiwind rechaza el email y la contraseña pegados con fill.
@@ -423,8 +423,8 @@ async def test_cancelled_withdraw_keeps_lock_until_thread_finishes():
     assert not other.done() or browser.calls.count(("close",)) >= 2
     await other
     # los comandos del withdraw terminan antes de que empiece el lookup
-    first_open = browser.calls.index(("open", WITHDRAWAL_URL, None))
-    second_open = browser.calls.index(("open", WITHDRAWAL_URL, None), first_open + 1)
+    first_open = browser.calls.index(("open", WITHDRAWAL_URL))
+    second_open = browser.calls.index(("open", WITHDRAWAL_URL), first_open + 1)
     withdraw_calls = browser.calls[:second_open]
     assert ("fill", DESTINATION_INPUT, "a.b.c") not in withdraw_calls
     # close inicial y final del withdraw, más el close inicial del lookup

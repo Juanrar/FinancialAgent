@@ -15,8 +15,8 @@ class FakeBrowser:
         self.calls: list[tuple] = []
         self.delay = delay
 
-    def open(self, url: str, headed: bool | None = None) -> None:
-        self.calls.append(("open", url, headed))
+    def open(self, url: str) -> None:
+        self.calls.append(("open", url))
         if self.delay:
             time.sleep(self.delay)
 

@@ -31,23 +31,36 @@ def _browser(monkeypatch, fake, headed=False):
     return AgentBrowser("ab", "fiwind", Path("perfil"), headed=headed)
 
 
-def test_open_passes_profile_and_headed(monkeypatch):
-    fake = FakeRun()
-    _browser(monkeypatch, fake, headed=True).open("https://x")
-    assert fake.calls[0][0] == ["ab", "--session", "fiwind", "--profile", str(Path("perfil")),
-                                "--headed", "open", "https://x"]
-
-
-def test_open_headed_override_and_headless(monkeypatch):
-    fake = FakeRun()
-    _browser(monkeypatch, fake, headed=True).open("https://x", headed=False)
-    assert "--headed" not in fake.calls[0][0]
-
-
-def test_run_never_passes_profile(monkeypatch):
+def test_every_command_carries_profile_in_env(monkeypatch):
+    monkeypatch.setenv("AGENT_BROWSER_EXECUTABLE_PATH", "/usr/bin/chromium")
     fake = FakeRun("https://panel")
-    assert _browser(monkeypatch, fake).run("get", "url") == "https://panel"
-    assert fake.calls[0][0] == ["ab", "--session", "fiwind", "get", "url"]
+    browser = _browser(monkeypatch, fake)
+    browser.open("https://x")
+    assert browser.run("get", "url") == "https://panel"
+    assert [cmd for cmd, _ in fake.calls] == [
+        ["ab", "--session", "fiwind", "open", "https://x"],
+        ["ab", "--session", "fiwind", "get", "url"],
+    ]
+    for _, kwargs in fake.calls:
+        env = kwargs["env"]
+        assert env["AGENT_BROWSER_PROFILE"] == str(Path("perfil"))
+        assert env["AGENT_BROWSER_EXECUTABLE_PATH"] == "/usr/bin/chromium"
+        assert "AGENT_BROWSER_HEADED" not in env
+
+
+def test_headed_goes_on_every_command(monkeypatch):
+    fake = FakeRun()
+    browser = _browser(monkeypatch, fake, headed=True)
+    browser.open("https://x")
+    browser.run("get", "url")
+    assert [kwargs["env"]["AGENT_BROWSER_HEADED"] for _, kwargs in fake.calls] == ["1", "1"]
+
+
+def test_headless_drops_inherited_headed(monkeypatch):
+    monkeypatch.setenv("AGENT_BROWSER_HEADED", "1")
+    fake = FakeRun()
+    _browser(monkeypatch, fake).run("get", "url")
+    assert "AGENT_BROWSER_HEADED" not in fake.calls[0][1]["env"]
 
 
 def test_output_goes_to_file_not_pipe(monkeypatch):
