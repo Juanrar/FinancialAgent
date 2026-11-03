@@ -51,6 +51,37 @@ El bot usa su propio perfil de navegador, guardado en `FIWIND_PROFILE_DIR`, y la
 
 Si Fiwind rechaza el email o la contraseña, el bot no ofrece reintentar, porque varios intentos fallidos pueden bloquear la cuenta. Corregí el `.env` y reiniciá el bot. El aviso de sesión vencida se repite como mucho una vez cada 10 minutos.
 
+### Login manual
+
+En una VM, Fiwind rechaza el login automático. El formulario manda un token de reCAPTCHA, y Google marca como automatizado al Chromium del contenedor. Fiwind responde "Unexpected error" y la página lo muestra como email o contraseña incorrectos. Ahí el login lo hacés vos, en un Chromium común con el perfil del bot, que ves desde el navegador de tu PC.
+
+Sacá `FIWIND_EMAIL` y `FIWIND_PASSWORD` del `.env` de la VM. Sin esas variables el bot no intenta el login automático, que solo suma intentos fallidos, y el aviso de sesión vencida te manda a esta sección.
+
+Cuando vence la sesión:
+
+1. En la VM, frená el bot y abrí el Chromium del login. El bot usa el mismo perfil, y Chromium no puede abrirlo dos veces.
+
+   ```sh
+   docker compose stop app
+   docker compose --profile login run --rm --service-ports fiwind-login
+   ```
+
+2. En tu PC, abrí un túnel SSH. Después entrá a http://localhost:6080/vnc.html y tocá Connect.
+
+   ```sh
+   ssh -L 6080:localhost:6080 usuario@ip-de-la-vm
+   ```
+
+3. Iniciá sesión en Fiwind. Si te pide el código del mail, cargalo ahí.
+4. Cuando veas el panel, cerrá la ventana de Chromium. Ctrl+C en la terminal de la VM también sirve: el script cierra la ventana antes de salir. Chromium guarda la sesión al cerrar la ventana. Si recibe una señal sin cerrar la ventana, solo guarda lo que escribió en su guardado periódico, cada unos 30 segundos.
+5. Levantá el bot de nuevo y probá `/saldo`.
+
+   ```sh
+   docker compose start app
+   ```
+
+El puerto 6080 se publica solo en `127.0.0.1` de la VM, así que solo se llega por el túnel.
+
 ## Cómo está hecho
 
 Python 3.13 · FastAPI · python-telegram-bot (long polling) · SQLite · [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python) · agent-browser.
@@ -143,4 +174,4 @@ docker compose up -d --build
 
 El contenedor corre como el usuario 1000 y guarda la base y la configuración en `data/`. No publica puertos: el bot usa long polling y `/health` solo lo consulta el healthcheck.
 
-La imagen no trae agent-browser. Dentro de Docker el bot no puede verificar destinos ni transferir.
+La imagen trae agent-browser y el Chromium de Debian, que funciona en x64 y en ARM. Para iniciar sesión en Fiwind desde un servidor, ver "Login manual".
