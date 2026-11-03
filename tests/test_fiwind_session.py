@@ -8,6 +8,7 @@ from fakes import FakeWallet
 from financial_agent.bot.awaiting import Awaiting, get_awaiting, set_awaiting
 from financial_agent.bot.fiwind_session import (
     MSG_SESSION_EXPIRED,
+    MSG_SESSION_EXPIRED_MANUAL,
     handle_awaiting,
     on_fiwind_callback,
     send_session_expired,
@@ -147,3 +148,11 @@ async def test_send_session_expired():
     assert call.args == (5, MSG_SESSION_EXPIRED)
     assert call.kwargs["reply_markup"].inline_keyboard == session_keyboard().inline_keyboard
     assert _buttons(call) == LOGIN_BUTTON
+
+
+async def test_send_session_expired_manual_has_no_login_button():
+    bot = SimpleNamespace(send_message=AsyncMock())
+    await send_session_expired(bot, 5, manual=True)
+    call = bot.send_message.await_args
+    assert call.args == (5, MSG_SESSION_EXPIRED_MANUAL)
+    assert "reply_markup" not in call.kwargs

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -170,8 +171,7 @@ def test_restart_notice_failure_does_not_stop_startup(settings, monkeypatch):
     assert len(sessions[0]._context_notes) == 1
 
 
-def test_wallet_sends_session_expired_notice_to_juan(settings, monkeypatch):
-    from financial_agent.bot.fiwind_session import MSG_SESSION_EXPIRED
+def _session_expired_notice(settings, monkeypatch):
     from financial_agent.fiwind.client import FiwindClient
 
     send = AsyncMock()
@@ -186,7 +186,24 @@ def test_wallet_sends_session_expired_notice_to_juan(settings, monkeypatch):
     with TestClient(create_app(settings)):
         asyncio.run(notifiers[0]())
     send.assert_awaited_once()
-    assert send.await_args.args == (1, MSG_SESSION_EXPIRED)
+    return send.await_args
+
+
+def test_wallet_sends_session_expired_notice_to_juan(settings, monkeypatch):
+    from financial_agent.bot.fiwind_session import MSG_SESSION_EXPIRED
+
+    settings = replace(settings, fiwind_email="juan@example.com", fiwind_password="clave")
+    call = _session_expired_notice(settings, monkeypatch)
+    assert call.args == (1, MSG_SESSION_EXPIRED)
+    assert "reply_markup" in call.kwargs
+
+
+def test_session_expired_without_credentials_asks_for_manual_login(settings, monkeypatch):
+    from financial_agent.bot.fiwind_session import MSG_SESSION_EXPIRED_MANUAL
+
+    call = _session_expired_notice(settings, monkeypatch)
+    assert call.args == (1, MSG_SESSION_EXPIRED_MANUAL)
+    assert "reply_markup" not in call.kwargs
 
 
 def test_restart_without_bot_still_marks_unconfirmed(settings, monkeypatch):

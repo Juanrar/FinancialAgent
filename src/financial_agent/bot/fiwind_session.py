@@ -12,6 +12,10 @@ from financial_agent.fiwind.client import (
 PREFIX = "f"
 CODE_AWAITING = Awaiting("fiwind_code", 0)
 MSG_SESSION_EXPIRED = "La sesión de Fiwind venció. Tocá Iniciar sesión."
+MSG_SESSION_EXPIRED_MANUAL = (
+    "La sesión de Fiwind venció. Iniciala a mano con el servicio fiwind-login: "
+    "los pasos están en el README, en \"Login manual\"."
+)
 MSG_LOGIN_STARTED = "Iniciando sesión en Fiwind."
 MSG_LOGIN_DONE = "Listo, la sesión de Fiwind está activa."
 MSG_CODE_REQUESTED = "Fiwind te mandó un código al mail. Mandame los 6 números."
@@ -36,7 +40,12 @@ def session_keyboard() -> InlineKeyboardMarkup:
     return _keyboard("Iniciar sesión", "login")
 
 
-async def send_session_expired(bot, chat_id: int) -> None:
+async def send_session_expired(bot, chat_id: int, manual: bool = False) -> None:
+    if manual:
+        # Sin email y contraseña en el .env no hay login automático: Juan inicia
+        # sesión en el navegador del bot por pantalla remota.
+        await bot.send_message(chat_id, MSG_SESSION_EXPIRED_MANUAL)
+        return
     await bot.send_message(chat_id, MSG_SESSION_EXPIRED, reply_markup=session_keyboard())
 
 

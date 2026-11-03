@@ -49,7 +49,9 @@ def create_app(settings: Settings | None = None, with_bot: bool = True) -> FastA
             async def notify_session_expired() -> None:
                 # La wallet se arma antes que el bot: el aviso usa el bot que haya al avisar.
                 if bot is not None:
-                    await send_session_expired(bot.bot, active.telegram_owner_id)
+                    await send_session_expired(
+                        bot.bot, active.telegram_owner_id, manual=credentials is None
+                    )
 
             wallet = FiwindClient(browser, credentials, on_session_expired=notify_session_expired)
             session = AgentSession(active, conn, wallet=wallet)
