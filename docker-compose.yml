@@ -1,6 +1,8 @@
 services:
   app:
-    build: .
+    build:
+      context: .
+      target: app
     env_file: .env
     environment:
       - TZ=America/Argentina/Buenos_Aires
@@ -14,3 +16,19 @@ services:
       options:
         max-size: 10m
         max-file: "3"
+
+  # Login manual en Fiwind (README, "Login manual"). No arranca con `up`:
+  # docker compose --profile login run --rm --service-ports fiwind-login
+  fiwind-login:
+    build:
+      context: .
+      target: login
+    profiles: ["login"]
+    env_file: .env
+    environment:
+      - TZ=America/Argentina/Buenos_Aires
+    volumes:
+      - ./data:/app/data
+    # Solo en el loopback de la VM: se llega por un túnel SSH.
+    ports:
+      - "127.0.0.1:6080:6080"

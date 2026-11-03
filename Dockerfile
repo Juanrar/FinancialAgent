@@ -6,7 +6,7 @@ RUN npm install -g agent-browser@0.27.0 \
     && arch="$(dpkg --print-architecture | sed 's/amd64/x64/')" \
     && cp "$(npm root -g)/agent-browser/bin/agent-browser-linux-${arch}" /agent-browser
 
-FROM python:3.13-slim
+FROM python:3.13-slim AS app
 
 COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /uvx /bin/
 
@@ -43,3 +43,19 @@ HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"
 
 CMD ["uv", "run", "--no-sync", "uvicorn", "financial_agent.app:create_app", "--factory", "--host", "127.0.0.1", "--port", "8000", "--no-access-log"]
+
+# Login manual en Fiwind: Chromium con ventana en una pantalla virtual, visible
+# desde el navegador de la PC con noVNC. Ver scripts/fiwind_login.sh.
+FROM app AS login
+
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends xvfb x11vnc novnc websockify xdotool \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /tmp/.X11-unix \
+    && chmod 1777 /tmp/.X11-unix
+COPY --chmod=0755 scripts/fiwind_login.sh /usr/local/bin/fiwind-login
+USER app
+
+HEALTHCHECK NONE
+CMD ["fiwind-login"]
