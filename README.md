@@ -175,3 +175,13 @@ docker compose up -d --build
 El contenedor corre como el usuario 1000 y guarda la base y la configuración en `data/`. No publica puertos: el bot usa long polling y `/health` solo lo consulta el healthcheck.
 
 La imagen trae agent-browser y el Chromium de Debian, que funciona en x64 y en ARM. Para iniciar sesión en Fiwind desde un servidor, ver "Login manual".
+
+## Comandos
+levantarlo
+tmux new -s bot ./agent.sh
+
+restaurar la session
+tmux attach -t bot
+
+frenarlo
+tmux send-keys -t bot C-c
