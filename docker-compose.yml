@@ -4,8 +4,10 @@ services:
       context: .
       target: app
     env_file: .env
+    # El Chromium de la imagen, aunque el .env apunte al del sistema para correr sin Docker.
     environment:
       - TZ=America/Argentina/Buenos_Aires
+      - AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
     # En Linux (VPS), antes del primer `docker compose up`: mkdir -p data && sudo chown 1000:1000 data
     # El contenedor corre como uid 1000 y necesita escribir en data/.
     volumes:
@@ -27,6 +29,10 @@ services:
     env_file: .env
     environment:
       - TZ=America/Argentina/Buenos_Aires
+      - AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
+      # Dentro del contenedor, noVNC escucha en todas las interfaces para que
+      # Docker publique el puerto.
+      - NOVNC_LISTEN=0.0.0.0:6080
     volumes:
       - ./data:/app/data
     # Solo en el loopback de la VM: se llega por un túnel SSH.
