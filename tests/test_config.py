@@ -71,6 +71,11 @@ def test_fiwind_headed_truthy_values(value):
     assert load_settings(REQUIRED | {"FIWIND_HEADED": value}).fiwind_headed is True
 
 
+def test_fiwind_autologin_is_off_by_default():
+    assert load_settings(REQUIRED).fiwind_autologin is False
+    assert load_settings(REQUIRED | {"FIWIND_AUTOLOGIN": "1"}).fiwind_autologin is True
+
+
 @pytest.mark.parametrize("hour", ["0", "24", "x"])
 def test_routine_hour_invalid(hour):
     with pytest.raises(ConfigError, match="ROUTINE_HOUR debe ser una hora entre 1 y 23"):

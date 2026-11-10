@@ -26,6 +26,11 @@ class Settings:
     routine_hour: int
     fiwind_email: str | None
     fiwind_password: str | None = field(repr=False)
+    fiwind_autologin: bool = False
+
+
+def _flag(environ: Mapping[str, str], name: str) -> bool:
+    return environ.get(name, "").strip().lower() in ("1", "true", "si", "sí")
 
 
 def _required(environ: Mapping[str, str], name: str) -> str:
@@ -80,9 +85,10 @@ def load_settings(environ: Mapping[str, str] = os.environ) -> Settings:
         timezone=environ.get("TZ", "").strip() or "America/Argentina/Buenos_Aires",
         log_level=environ.get("LOG_LEVEL", "").strip() or "INFO",
         fiwind_profile_dir=_fiwind_profile_dir(environ),
-        fiwind_headed=environ.get("FIWIND_HEADED", "").strip().lower() in ("1", "true", "si", "sí"),
+        fiwind_headed=_flag(environ, "FIWIND_HEADED"),
         agent_browser_bin=environ.get("AGENT_BROWSER_BIN", "").strip() or None,
         routine_hour=_routine_hour(environ),
         fiwind_email=environ.get("FIWIND_EMAIL", "").strip() or None,
         fiwind_password=environ.get("FIWIND_PASSWORD", "").strip() or None,
+        fiwind_autologin=_flag(environ, "FIWIND_AUTOLOGIN"),
     )

@@ -82,6 +82,20 @@ Cuando vence la sesión:
 
 El puerto 6080 se publica solo en `127.0.0.1` de la VM, así que solo se llega por el túnel.
 
+### Login automático en la VM
+
+Con `FIWIND_AUTOLOGIN=1` en el `.env` de la VM, el bot renueva la sesión solo. Cuando una operación encuentra la sesión vencida, el bot corre `scripts/fiwind_autologin.sh` y repite la operación. La lectura diaria del saldo alcanza para que lo detecte aunque no uses el bot.
+
+El script abre un Chromium con ventana en una pantalla virtual, con el perfil del bot, y carga `FIWIND_EMAIL` y `FIWIND_PASSWORD`. Ese Chromium pasa el reCAPTCHA. Necesita `xvfb`, `xdotool` y `curl` instalados en la VM, y que el bot arranque desde la carpeta del repo, como hace `agent.sh`. No está pensado para la imagen de Docker, que no trae esos paquetes.
+
+También se puede correr a mano, con el bot andando o frenado:
+
+```sh
+sh scripts/fiwind_autologin.sh
+```
+
+Si Fiwind pide el código del mail o no acepta el login, el script crea `data/fiwind_autologin.bloqueado` y no vuelve a intentar, porque varios intentos fallidos pueden bloquear la cuenta. El bot te manda el aviso de sesión vencida. Hacé el login manual y borrá ese archivo.
+
 ## Cómo está hecho
 
 Python 3.13 · FastAPI · python-telegram-bot (long polling) · SQLite · [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python) · agent-browser.
@@ -153,6 +167,7 @@ Sin agent-browser el bot arranca igual. La charla, los contactos y la memoria fu
 | `ROUTINE_HOUR` | Hora, de 1 a 23, a la que llegan las rutinas. Por defecto 10. |
 | `TZ` | Zona horaria. Por defecto `America/Argentina/Buenos_Aires`. |
 | `FIWIND_HEADED` | `1` muestra el navegador mientras opera Fiwind. |
+| `FIWIND_AUTOLOGIN` | `1` hace que el bot renueve la sesión de Fiwind solo en una VM. Ver "Login automático en la VM". |
 | `FIWIND_PROFILE_DIR` · `AGENT_BROWSER_BIN` | Carpeta del perfil del navegador y ruta de agent-browser si no está en el PATH. |
 | `DB_PATH` · `CLAUDE_CONFIG_DIR` · `AGENT_CWD` | Rutas de la base, de la configuración de Claude y del directorio de trabajo del agente. Por defecto, dentro de `data/`. |
 | `LOG_LEVEL` | Nivel de logs. Por defecto `INFO`. |

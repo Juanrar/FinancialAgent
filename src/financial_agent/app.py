@@ -8,6 +8,7 @@ from financial_agent.agent.session import AgentSession
 from financial_agent.bot.application import build_application, start_bot, stop_bot
 from financial_agent.bot.fiwind_session import send_session_expired
 from financial_agent.config import Settings, load_settings
+from financial_agent.fiwind.autologin import run_autologin
 from financial_agent.fiwind.browser import AgentBrowser, find_binary
 from financial_agent.fiwind.client import Credentials, FiwindClient
 from financial_agent.logs import setup_logging
@@ -44,16 +45,22 @@ def create_app(settings: Settings | None = None, with_bot: bool = True) -> FastA
             credentials = None
             if active.fiwind_email and active.fiwind_password:
                 credentials = Credentials(active.fiwind_email, active.fiwind_password)
+            
+            renew_session = None
+            if active.fiwind_autologin and browser is not None and credentials is not None:
+                renew_session = run_autologin
             bot = None
 
             async def notify_session_expired() -> None:
                 # La wallet se arma antes que el bot: el aviso usa el bot que haya al avisar.
                 if bot is not None:
                     await send_session_expired(
-                        bot.bot, active.telegram_owner_id, manual=credentials is None
+                        bot.bot, active.telegram_owner_id,
+                        manual=credentials is None or renew_session is not None,
                     )
 
-            wallet = FiwindClient(browser, credentials, on_session_expired=notify_session_expired)
+            wallet = FiwindClient(browser, credentials, on_session_expired=notify_session_expired,
+                                  renew_session=renew_session)
             session = AgentSession(active, conn, wallet=wallet)
             for action in interrupted:
                 session.add_context_note(

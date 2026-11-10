@@ -206,6 +206,68 @@ def test_session_expired_without_credentials_asks_for_manual_login(settings, mon
     assert "reply_markup" not in call.kwargs
 
 
+def test_autologin_asks_for_manual_login_when_renewal_fails(settings, monkeypatch):
+    from financial_agent.bot.fiwind_session import MSG_SESSION_EXPIRED_MANUAL
+
+    settings = replace(settings, fiwind_email="juan@example.com", fiwind_password="clave",
+                       fiwind_autologin=True)
+    send = AsyncMock()
+    _patch_bot(monkeypatch, send)
+    monkeypatch.setattr("financial_agent.app.find_binary", lambda configured: "agent-browser")
+    wallets = []
+    real_wallet = __import__("financial_agent.app", fromlist=["FiwindClient"]).FiwindClient
+
+    def make_wallet(*args, **kwargs):
+        wallets.append(kwargs)
+        return real_wallet(*args, **kwargs)
+
+    monkeypatch.setattr("financial_agent.app.FiwindClient", make_wallet)
+    with TestClient(create_app(settings)):
+        asyncio.run(wallets[0]["on_session_expired"]())
+    assert wallets[0]["renew_session"] is not None
+    assert send.await_args.args == (1, MSG_SESSION_EXPIRED_MANUAL)
+
+
+def test_without_autologin_the_wallet_does_not_renew(settings, monkeypatch):
+    calls = []
+    real_wallet = __import__("financial_agent.app", fromlist=["FiwindClient"]).FiwindClient
+
+    def make_wallet(*args, **kwargs):
+        calls.append(kwargs)
+        return real_wallet(*args, **kwargs)
+
+    monkeypatch.setattr("financial_agent.app.find_binary", lambda configured: "agent-browser")
+    monkeypatch.setattr("financial_agent.app.FiwindClient", make_wallet)
+    active = replace(settings, fiwind_email="juan@example.com", fiwind_password="clave")
+    with TestClient(create_app(active, with_bot=False)):
+        pass
+    assert calls[0]["renew_session"] is None
+
+
+def test_run_autologin_reports_whether_the_session_is_active(monkeypatch, tmp_path):
+    import subprocess
+
+    from financial_agent.fiwind import autologin
+
+    class Process:
+        def __init__(self, code):
+            self.code, self.terminated = code, False
+
+        def wait(self, timeout):
+            if self.code is None and not self.terminated:
+                raise subprocess.TimeoutExpired("sh", timeout)
+            return self.code
+
+        def terminate(self):
+            self.terminated = True
+
+    for code, expected in ((0, True), (2, False), (None, False)):
+        process = Process(code)
+        monkeypatch.setattr(autologin.subprocess, "Popen", lambda *a, **k: process)
+        assert autologin.run_autologin(tmp_path / "login.sh") is expected
+        assert process.terminated is (code is None)
+
+
 def test_restart_without_bot_still_marks_unconfirmed(settings, monkeypatch):
     action_id = _seed_in_flight(settings)
     monkeypatch.setattr("financial_agent.app.find_binary", lambda configured: None)

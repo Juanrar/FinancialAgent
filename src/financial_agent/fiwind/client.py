@@ -165,8 +165,12 @@ def _reason(exc: Exception) -> str:
 class FiwindClient:
     def __init__(self, browser: AgentBrowser | None, credentials: Credentials | None = None,
                  clock=time.monotonic,
-                 on_session_expired: Callable[[], Awaitable[None]] | None = None):
+                 on_session_expired: Callable[[], Awaitable[None]] | None = None,
+                 renew_session: Callable[[], bool] | None = None):
         self._browser = browser
+        # Login sin intervención. Corre en un hilo, con el navegador del bot cerrado,
+        # y devuelve True si la sesión quedó activa.
+        self._renew_session = renew_session
         self._credentials = credentials
         self._clock = clock
         # Aviso de sesión vencida: lo manda la wallet, no quien llama.
@@ -201,6 +205,10 @@ class FiwindClient:
             self._step = STEP_OPEN
             try:
                 outcome = await self._exclusive("withdraw", self._withdraw_sync, order)
+                # Expired sale antes de "Enviar": repetir no puede mandar dos veces.
+                if isinstance(outcome, Expired) and await self._renew():
+                    self._step = STEP_OPEN
+                    outcome = await self._exclusive("withdraw", self._withdraw_sync, order)
             except Exception as exc:
                 # No debería pasar: _withdraw_sync atrapa todo. Si pasa, solo
                 # sabemos que llegó hasta self._step.
@@ -302,6 +310,23 @@ class FiwindClient:
             finally:
                 browser.close()
 
+        return await self._uninterrupted(name, job)
+
+    async def _renew(self) -> bool:
+        """Intenta el login sin intervención. True si la sesión quedó activa."""
+        if self._renew_session is None:
+            return False
+        try:
+            renewed = bool(await self._uninterrupted("renew", self._renew_session))
+        except Exception as exc:
+            logger.warning("fiwind renew: resultado=%s", type(exc).__name__)
+            return False
+        logger.info("fiwind renew: resultado=%s", "sesión activa" if renewed else "sin sesión")
+        if renewed:
+            self._notice_sent_at = None
+        return renewed
+
+    async def _uninterrupted(self, name: str, job):
         fut = asyncio.ensure_future(asyncio.to_thread(job))
         try:
             return await asyncio.shield(fut)
@@ -320,7 +345,13 @@ class FiwindClient:
         """Corre fn con cierre del navegador y traduce errores."""
         self._step = STEP_OPEN
         try:
-            return await self._exclusive(name, fn, *args)
+            try:
+                return await self._exclusive(name, fn, *args)
+            except SessionExpired:
+                if not await self._renew():
+                    raise
+                self._step = STEP_OPEN
+                return await self._exclusive(name, fn, *args)
         except SessionExpired:
             logger.info("fiwind %s: paso=%s resultado=SessionExpired", name, self._step)
             await self._notify_expired()

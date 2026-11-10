@@ -248,6 +248,59 @@ async def test_failed_notice_keeps_the_outcome_and_is_retried():
     assert notices.count == 2
 
 
+class Renewal:
+    """Adaptador de prueba del login sin intervención: cuenta las corridas."""
+
+    def __init__(self, result=True):
+        self.count = 0
+        self.result = result
+
+    def __call__(self):
+        self.count += 1
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+def _renewing_client(urls, renewal, notices=None):
+    client, browser = _client({("get", "url"): list(urls)}, notices)
+    client._renew_session = renewal
+    return client, browser
+
+
+async def test_expired_session_is_renewed_and_the_operation_repeated():
+    renewal, notices = Renewal(), Notices()
+    client, browser = _renewing_client([LOGIN_URL, PANEL_URL], renewal, notices)
+    assert await client.read_balance() == 300
+    assert (renewal.count, notices.count) == (1, 0)
+    # El login usa el mismo perfil: el navegador del bot se cierra antes.
+    assert browser.calls.count(("open", PANEL_URL)) == 2
+
+
+async def test_expired_withdraw_is_renewed_and_sent_once():
+    renewal, notices = Renewal(), Notices()
+    client, browser = _renewing_client([LOGIN_URL, WITHDRAWAL_URL], renewal, notices)
+    assert await client.withdraw(ORDER) == Sent("En proceso")
+    assert (renewal.count, notices.count) == (1, 0)
+    assert browser.calls.count(SEND) == 1
+
+
+@pytest.mark.parametrize("result", [False, RuntimeError("sin Xvfb")])
+async def test_failed_renewal_sends_the_notice(result):
+    renewal, notices = Renewal(result), Notices()
+    client, _ = _renewing_client([LOGIN_URL], renewal, notices)
+    with pytest.raises(SessionExpired):
+        await client.lookup("a.b.c")
+    assert (renewal.count, notices.count) == (1, 1)
+
+
+async def test_session_still_expired_after_renewal_is_not_renewed_again():
+    renewal, notices = Renewal(), Notices()
+    client, _ = _renewing_client([LOGIN_URL, LOGIN_URL], renewal, notices)
+    assert await client.withdraw(ORDER) == Expired()
+    assert (renewal.count, notices.count) == (1, 1)
+
+
 EMAIL, PASSWORD, CODE = "juan@mail.com", "clave-123", "432802"
 AUTHORIZE_URL = "https://panel.fiwind.io/auth/authorize-device"
 INGRESAR = ("find", "role", "button", "click", "--name", "Ingresar")
